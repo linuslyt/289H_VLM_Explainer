@@ -430,7 +430,6 @@ def register_hooks(
                 token_of_interest,
                 token_of_interest.capitalize(),
                 token_of_interest.lower(),
-                " " + token_of_interest,
             ]
         )
         token_of_interest_idx = args.token_of_interest_idx
@@ -441,6 +440,11 @@ def register_hooks(
                     for tok in tokens_of_interest
                 ]
             )
+            check_token = tokenizer.encode(" " + token_of_interest, add_special_tokens=False)[0]
+            if token_of_interest in tokenizer.decode([check_token]): # Check if this check_token is only encoding whitespace
+                token_of_interest_idx = torch.tensor(list(token_of_interest_idx) + [check_token])
+            
+
         hook_function = save_hidden_states
         hook_return_function = partial(
             get_hidden_states,

@@ -8,23 +8,23 @@ hook_name=save_hidden_states_for_token_of_interest  # Only save features for a t
 #hook_name=save_hidden_states_given_token_start_end_idx   # Save all representations from start to end indices
 #hook_name=save_hidden_states_given_token_idx   # Save representations at specific index
 
-token=train
-#token=dog # Can also use other nouns that appear in your dataset
+#token=train
+token=dog # Can also use other nouns that appear in your dataset
 
 
-#model_name=llava-hf/llava-1.5-7b-hf
+model_name=llava-hf/llava-1.5-7b-hf
 #model_name=allenai/Molmo-7B-D-0924
 #model_name=HuggingFaceM4/idefics2-8b
-model_name=Qwen/Qwen2-VL-7B-Instruct
+#model_name=Qwen/Qwen2-VL-7B-Instruct
 
 # Directory and filename to store extracted features
-results_filename=qwen2_train_generation_split_train
+results_filename=llava_dog_generation_split_train
 save_dir=/home/parekh/
 
 # Named modules inside the specific model for which you want to save the representations
 
 # Examples of named modules for LLaVA-v1.5
-#feature_modules=language_model.model.norm,language_model.model.layers.30
+feature_modules=language_model.model.norm,language_model.model.layers.30,language_model.model.layers.31
 #feature_modules=language_model.model.layers.28.input_layernorm
 #feature_modules=language_model.model.layers.29
 
@@ -35,7 +35,7 @@ save_dir=/home/parekh/
 #feature_modules=model.text_model.norm,model.text_model.layers.30
 
 # Examples of named modules for Qwen2-VL-7B
-feature_modules=model.norm,model.layers.27
+#feature_modules=model.norm,model.layers.27
 
 
 # Dataset specifications. Ensure you modify dataset path (--data_dir command) accordingly
@@ -59,13 +59,14 @@ python src/save_features.py \
 --save_dir $save_dir \
 --save_filename $results_filename \
 --generation_mode \
---exact_match_modules_to_hook
+--exact_match_modules_to_hook \
+--save_only_generated_tokens
 
 
 # We save model representations on both train split (to learn the concepts) and test split (to evaluate)
 split=test
 size=5000
-results_filename=qwen2_train_generation_split_test
+results_filename=llava_dog_generation_split_test
 
 
 python src/save_features.py \
