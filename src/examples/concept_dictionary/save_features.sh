@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Path to your xl-vlms repository
-cd ~/xl-vlms
+cd ~/xai/xl-vlms
 
 # --hook_name controls strategy of feature extraction
 hook_name=save_hidden_states_for_token_of_interest  # Only save features for a token of interest in the output
@@ -19,7 +19,8 @@ model_name=llava-hf/llava-1.5-7b-hf
 
 # Directory and filename to store extracted features
 results_filename=llava_dog_generation_split_train
-save_dir=/home/parekh/
+save_dir=/home/ytllam/xai/xl-vlms/out/
+test_results_filename=llava_dog_generation_split_test
 
 # Named modules inside the specific model for which you want to save the representations
 
@@ -39,28 +40,28 @@ feature_modules=language_model.model.norm,language_model.model.layers.30,languag
 
 
 # Dataset specifications. Ensure you modify dataset path (--data_dir command) accordingly
-data_dir=/data/mshukor/data/coco/ # Data directory for COCO dataset
+data_dir=/media/data/ytllam/coco # Data directory for COCO dataset
 split=train # Which data split to save features for. For COCO: train/val/test options
 size=82783 # How many samples of dataset to consider. karpathy train split for COCO is of size 82783 images. Can't be more than dataset size
 annotation_file=karpathy/dataset_coco.json
 
 
-python src/save_features.py \
---model_name $model_name \
---dataset_name coco \
---dataset_size $size \
---data_dir $data_dir \
---annotation_file $annotation_file \
---split $split \
---hook_name $hook_name \
---modules_to_hook $feature_modules \
---select_token_of_interest_samples \
---token_of_interest $token \
---save_dir $save_dir \
---save_filename $results_filename \
---generation_mode \
---exact_match_modules_to_hook \
---save_only_generated_tokens
+# python src/save_features.py \
+# --model_name $model_name \
+# --dataset_name coco \
+# --dataset_size $size \
+# --data_dir $data_dir \
+# --annotation_file $annotation_file \
+# --split $split \
+# --hook_name $hook_name \
+# --modules_to_hook $feature_modules \
+# --select_token_of_interest_samples \
+# --token_of_interest $token \
+# --save_dir $save_dir \
+# --save_filename $results_filename \
+# --generation_mode \
+# --exact_match_modules_to_hook \
+# --save_only_generated_tokens
 
 
 # We save model representations on both train split (to learn the concepts) and test split (to evaluate)
@@ -80,7 +81,7 @@ python src/save_features.py \
 --modules_to_hook $feature_modules \
 --select_token_of_interest_samples \
 --token_of_interest $token \
---save_dir /home/parekh/ \
---save_filename $results_filename \
+--save_dir $save_dir \
+--save_filename $test_results_filename \
 --generation_mode \
 --exact_match_modules_to_hook
