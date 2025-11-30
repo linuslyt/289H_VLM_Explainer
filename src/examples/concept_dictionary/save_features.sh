@@ -46,22 +46,23 @@ size=82783 # How many samples of dataset to consider. karpathy train split for C
 annotation_file=karpathy/dataset_coco.json
 
 
-# python src/save_features.py \
-# --model_name $model_name \
-# --dataset_name coco \
-# --dataset_size $size \
-# --data_dir $data_dir \
-# --annotation_file $annotation_file \
-# --split $split \
-# --hook_name $hook_name \
-# --modules_to_hook $feature_modules \
-# --select_token_of_interest_samples \
-# --token_of_interest $token \
-# --save_dir $save_dir \
-# --save_filename $results_filename \
-# --generation_mode \
-# --exact_match_modules_to_hook \
-# --save_only_generated_tokens
+python src/save_features.py \
+--model_name $model_name \
+--dataset_name coco \
+--dataset_size $size \
+--data_dir $data_dir \
+--annotation_file $annotation_file \
+--split $split \
+--hook_names $hook_name \
+--modules_to_hook $feature_modules \
+--select_token_of_interest_samples \
+--token_of_interest $token \
+--save_dir $save_dir \
+--save_filename $results_filename \
+--generation_mode \
+--exact_match_modules_to_hook \
+--save_only_generated_tokens \
+--batch_size 42
 
 
 # We save model representations on both train split (to learn the concepts) and test split (to evaluate)
@@ -77,11 +78,12 @@ python src/save_features.py \
 --data_dir $data_dir \
 --annotation_file $annotation_file \
 --split $split \
---hook_name $hook_name \
+--hook_names $hook_name \
 --modules_to_hook $feature_modules \
 --select_token_of_interest_samples \
 --token_of_interest $token \
 --save_dir $save_dir \
 --save_filename $test_results_filename \
 --generation_mode \
---exact_match_modules_to_hook
+--exact_match_modules_to_hook \
+--batch_size 42

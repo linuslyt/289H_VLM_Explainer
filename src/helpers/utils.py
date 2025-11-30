@@ -55,6 +55,7 @@ def append_item_to_dict_of_list(key: str, value: Any, dictionary: Dict[str, Any]
     return dictionary
 
 
+# TODO: make batched version
 def update_dict_of_list(item: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
     for k, v in item.items():
         if k in data:
@@ -293,7 +294,7 @@ def extract_states_before_special_tokens(
     )
     return v_selected, no_token_found_mask
 
-
+# TODO: proper fix: modify for batching
 def get_hidden_states(
     token_idx: int = None,
     token_start_end_idx: List[List[int]] = None,
@@ -351,7 +352,7 @@ def get_hidden_states(
     output["hidden_states"] = hidden_states
     return output
 
-
+# TODO: proper fix: modify for batching
 def save_hidden_states_to_file(
     data: Dict[str, Any],
     data_keys: List[str] = ["hidden_states"],
@@ -419,6 +420,7 @@ def register_hooks(
         hook_return_function = partial(
             get_hidden_states, token_start_end_idx=args.token_start_end_idx
         )
+    # NOTE: USED FOR SAVE_FEATURES
     elif "save_hidden_states_for_token_of_interest" == hook_name:
         # Save the hidden states of tokens between start and end index
         token_of_interest = args.token_of_interest
@@ -528,7 +530,7 @@ def register_hooks(
 
     return hook_return_function
 
-
+# save_hidden_states_for_token_of_interest
 def hooks_postprocessing(
     hook_name: str = "save_hidden_states", args: argparse.Namespace = None
 ) -> Callable:
@@ -581,7 +583,9 @@ def setup_hooks(
     args: argparse.Namespace = None,
 ):
     hook_return_functions, hook_postprocessing_functions = [], []
+    # save_hidden_states_for_token_of_interest
     for i, hook_name in enumerate(hook_names):
+        # [['language_model.model.norm', 'language_model.model.layers.30', 'language_model.model.layers.31']]
         if modules_to_hook is not None and i < len(modules_to_hook):
             modules_to_hook_ = modules_to_hook[i]
             assert isinstance(
@@ -589,8 +593,8 @@ def setup_hooks(
             ), f"modules_to_hook_ must be of type list. modules_to_hook_: {modules_to_hook_}"
             hook_return_function = register_hooks(
                 model=model,
-                modules_to_hook=modules_to_hook_,
-                hook_name=hook_name,
+                modules_to_hook=modules_to_hook_, # ['language_model.model.norm', 'language_model.model.layers.30', 'language_model.model.layers.31']
+                hook_name=hook_name, # save_hidden_states_for_token_of_interest
                 tokenizer=tokenizer,
                 logger=logger,
                 args=args,
