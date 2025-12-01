@@ -55,8 +55,7 @@ def inference(
         else:
             out = model(**inputs).logits
 
-        print(out.shape)
-        # TODO: look at hooks and see if they need to be rework
+        # print(out.shape)
         item["model_output"] = out
         # output consists of prompt tokens followed by generated caption tokens
         # calculate input length to find where in the generated sequence the output begins
@@ -72,7 +71,6 @@ def inference(
             out[:, input_len:], skip_special_tokens=True
         )
 
-        # TODO: rough batching fix: break batch into loops in here
         if hook_return_functions is not None:
             for func in hook_return_functions:
                 if func is not None:
@@ -80,7 +78,7 @@ def inference(
                     if hook_output:
                         item.update(hook_output)
 
-        hook_data = update_dict_of_list(item, hook_data)
+        hook_data = update_dict_of_list(item, hook_data, is_batched)
         clear_hooks_variables()
         if (i + 1) % 100 == 0:
             time_left = compute_time_left(start_time, i, num_iterations)
@@ -137,7 +135,6 @@ if __name__ == "__main__":
     )
 
     clear_forward_hooks(model_class.model_)
-    # TODO: rough batching fix: break batch into loops in here
     if hook_postprocessing_functions is not None:
         for func in hook_postprocessing_functions:
             if func is not None:
@@ -162,4 +159,3 @@ if __name__ == "__main__":
     # )
 
     # ==> get_hidden_states() run on each iteration; save_hidden_states_to_file() run after all iterations
-    # TODO: check both these states for updating w/ batching behavior
