@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Path to your xl-vlms repository
-cd ~/xl-vlms
+cd ~/xai/xl-vlms
 
 # --hook_name controls strategy of feature extraction
 hook_name=save_hidden_states_for_token_of_interest  # Only save features for a token of interest in the output
@@ -18,8 +18,9 @@ model_name=llava-hf/llava-1.5-7b-hf
 #model_name=Qwen/Qwen2-VL-7B-Instruct
 
 # Directory and filename to store extracted features
-results_filename=llava_dog_generation_split_train
-save_dir=/home/parekh/
+results_filename=llava_dog_generation_split_train_batched_new
+save_dir=/home/ytllam/xai/xl-vlms/out/
+test_results_filename=llava_dog_generation_split_test_batched_new
 
 # Named modules inside the specific model for which you want to save the representations
 
@@ -39,8 +40,9 @@ feature_modules=language_model.model.norm,language_model.model.layers.30,languag
 
 
 # Dataset specifications. Ensure you modify dataset path (--data_dir command) accordingly
-data_dir=/data/mshukor/data/coco/ # Data directory for COCO dataset
+data_dir=/media/data/ytllam/coco # Data directory for COCO dataset
 split=train # Which data split to save features for. For COCO: train/val/test options
+# size=1000
 size=82783 # How many samples of dataset to consider. karpathy train split for COCO is of size 82783 images. Can't be more than dataset size
 annotation_file=karpathy/dataset_coco.json
 
@@ -52,7 +54,7 @@ python src/save_features.py \
 --data_dir $data_dir \
 --annotation_file $annotation_file \
 --split $split \
---hook_name $hook_name \
+--hook_names $hook_name \
 --modules_to_hook $feature_modules \
 --select_token_of_interest_samples \
 --token_of_interest $token \
@@ -60,13 +62,13 @@ python src/save_features.py \
 --save_filename $results_filename \
 --generation_mode \
 --exact_match_modules_to_hook \
---save_only_generated_tokens
+--save_only_generated_tokens \
+--batch_size 32
 
 
 # We save model representations on both train split (to learn the concepts) and test split (to evaluate)
 split=test
 size=5000
-results_filename=llava_dog_generation_split_test
 
 
 python src/save_features.py \
@@ -76,11 +78,12 @@ python src/save_features.py \
 --data_dir $data_dir \
 --annotation_file $annotation_file \
 --split $split \
---hook_name $hook_name \
+--hook_names $hook_name \
 --modules_to_hook $feature_modules \
 --select_token_of_interest_samples \
 --token_of_interest $token \
---save_dir /home/parekh/ \
---save_filename $results_filename \
+--save_dir $save_dir \
+--save_filename $test_results_filename \
 --generation_mode \
---exact_match_modules_to_hook
+--exact_match_modules_to_hook \
+--batch_size 32

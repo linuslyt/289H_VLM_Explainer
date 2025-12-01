@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, Union, List
 
 import torch
 from transformers import AutoProcessor, LlavaForConditionalGeneration
@@ -73,19 +73,30 @@ class LLaVA(ImageTextModel):
 
         return conversation
 
+    # TODO: batch
     def preprocess_text(
         self,
-        instruction: str = "What are these?",
-        response: str = "",
+        instruction: Union[str, List[str]] = "What are these?",
+        response: Union[str, List[str]] = "",
         generation_mode: bool = False,
         **kwargs: Any,
     ) -> str:
+        if isinstance(instruction, list) ^ isinstance(response, list):
+            raise ValueError("instruction and response must both be lists OR both be single instances")
+        is_batch = isinstance(instruction, list) and isinstance(response, list)
 
-        conversation = self.get_conversation_round(
-            instruction=instruction, response=response
-        )
+        if is_batch:
+            conversations = [self.get_conversation_round(instruction=i, response=r) for i, r in zip(instruction, response)]
+            # HuggingFace: 'We advise users to use padding_side="left" when computing batched generation as it leads to more accurate results.'
+            self.tokenizer_.padding_side = "left"
+        else:
+            conversations = self.get_conversation_round(
+                instruction=instruction, response=response
+            )
+
         prompt = self.processor_.apply_chat_template(
-            conversation, add_generation_prompt=generation_mode
+            conversations, add_generation_prompt=generation_mode,
+            padding=is_batch
         )
-
         return prompt
+

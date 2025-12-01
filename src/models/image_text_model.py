@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Union, List
 
 import requests
 from PIL import Image
@@ -59,22 +59,33 @@ class ImageTextModel:
             f"preprocess_text() is not defined for the model: {self.model_name_or_path}"
         )
 
+    # TODO: batch
     def preprocess_images(
         self,
-        image_file: str,
+        image_file: Union[str, List[str]],
         **kwargs: Any,
     ):
-        if "http" in image_file:
-            image = Image.open(requests.get(image_file, stream=True).raw)
+        
+        def preprocess_single_image(img):
+            if "http" in img:
+                image = Image.open(requests.get(img, stream=True).raw)
+            else:
+                image = Image.open(img)
+            return image
+        
+        if isinstance(image_file, list):
+            return [preprocess_single_image(i) for i in image_file]
         else:
-            image = Image.open(image_file)
-        return image
+            return preprocess_single_image(image_file)
 
+    # calls preprocess_images on a single file and preprocess_text() on a single text string.
+    # then passes preprocessed text into the selected model's processor (e.g. AutoProcessor for LLaVa) to obtain model-format inputs.
+    # currently seems to return ONE input
     def preprocess_input(
         self,
-        instruction: str = "What are these?",
-        image_file: str = None,
-        response: str = "",
+        instruction: Union[str, List[str]] = "What are these?",
+        image_file: Union[str, List[str]] = None,
+        response: Union[str, List[str]] = "",
         generation_mode: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
@@ -86,15 +97,21 @@ class ImageTextModel:
             generation_mode=generation_mode,
         )
 
+        # with a single input, returns a dict:
+        # {'input_ids': tensor([ [] ]), 'attention_mask': tensor([ [] ]), 'pixel_values': tensor([ [[[]]] ])}
+        # so i'm fairly certain I only need to change the inputs into arrays too
         inputs = self.processor_(images=image, text=text, return_tensors="pt")
 
         return inputs
 
+    # entrypoint.
+    # get_preprocessor() returns self.preprocessor_, which is set in llava.py under set_preprocessor() => self.preprocessor_ = self.preprocess_input.
+    # preprocessor = preprocess_input() is used to map image + text prompt into model input. (see above)
     def preprocessor(
         self,
-        instruction: str = "What are these?",
-        image_file: str = "",
-        response: str = "",
+        instruction: Union[str, List[str]] = "What are these?",
+        image_file: Union[str, List[str]] = "",
+        response: Union[str, List[str]] = "",
         generation_mode: bool = False,
         **kwargs: Any,
     ):

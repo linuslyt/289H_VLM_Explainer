@@ -1,6 +1,7 @@
 import argparse
 import os
 import time
+from tqdm import tqdm
 from typing import Any, Callable, Dict, List, Tuple
 
 import torch
@@ -29,17 +30,24 @@ def inference(
     hook_data = {}
     model = model_class.get_model()
     start_time = time.time()
-    for i, item in enumerate(loader):
-
-        text = item["text"][0]  # for now we support batch size = 1
-        image_path = item["image"][0]
+    is_batched = args.batch_size > 1
+    for i, item in enumerate(tqdm(loader, desc=f"Running inference with batch size {args.batch_size} for split {args.split}")):
+        text = item["text"] if is_batched else item["text"][0]
+        image_path = item["image"] if is_batched else item["image"][0]
+        # prompt is a concat of text (input) + response (output). 
+        # since we're generating we don't supply the output, so resp should be empty.
+        resp = [""] * len(text) if is_batched else ""
+        # print(f"INFERENCE_TYPE: is_batched={is_batched} text={type(text)}, path={type(image_path)}")
         inputs = model_class.preprocessor(
             instruction=text,
             image_file=image_path,
-            response="",
+            response=resp,
             generation_mode=args.generation_mode,
         )
 
+        # inputs.keys(): dict_keys(['input_ids', 'attention_mask', 'pixel_values'])
+
+        # do_sample False = greedy decoding; faster; deterministic
         if args.generation_mode:
             out = model.generate(
                 **inputs, max_new_tokens=args.max_new_tokens, do_sample=False
@@ -47,13 +55,18 @@ def inference(
         else:
             out = model(**inputs).logits
 
+        # print(out.shape)
         item["model_output"] = out
+        # output consists of prompt tokens followed by generated caption tokens
+        # calculate input length to find where in the generated sequence the output begins
         input_len = (
             inputs["input_ids"].shape[1]
             if inputs["input_ids"].ndim > 1
             else inputs["input_ids"].shape[0]
         )
+        # output in terms of token IDs
         item["model_generated_output"] = out[:, input_len:]
+        # output in decoded text
         item["model_predictions"] = model_class.get_tokenizer().batch_decode(
             out[:, input_len:], skip_special_tokens=True
         )
@@ -65,7 +78,7 @@ def inference(
                     if hook_output:
                         item.update(hook_output)
 
-        hook_data = update_dict_of_list(item, hook_data)
+        hook_data = update_dict_of_list(item, hook_data, is_batched)
         clear_hooks_variables()
         if (i + 1) % 100 == 0:
             time_left = compute_time_left(start_time, i, num_iterations)
@@ -78,6 +91,8 @@ def inference(
 if __name__ == "__main__":
 
     args = get_arguments()
+    if args.batch_size <= 0:
+        raise ValueError("Invalid batch size")
 
     logger = setup_logger(log_file=os.path.join(args.save_dir, f"logs.log"))
 
@@ -96,6 +111,8 @@ if __name__ == "__main__":
         args=args,
     )
 
+    # logger.info(f"Hook names: {args.hook_names}")
+    # > save_hidden_states_for_token_of_interest
     hook_return_functions, hook_postprocessing_functions = setup_hooks(
         model=model_class.model_,
         modules_to_hook=args.modules_to_hook,
@@ -105,7 +122,7 @@ if __name__ == "__main__":
         args=args,
     )
     loader = get_dataset_loader(
-        dataset_name=args.dataset_name, logger=logger, args=args
+        dataset_name=args.dataset_name, logger=logger, args=args,
     )
 
     hook_data = inference(
@@ -122,3 +139,23 @@ if __name__ == "__main__":
         for func in hook_postprocessing_functions:
             if func is not None:
                 func(data=hook_data, args=args, logger=logger)
+    
+    
+    # hook_return_function = register_hooks() =
+    # get_hidden_states(
+    #   extract_token_of_interest=True,
+    #   token_of_interest_idx=token_of_interest_idx,
+    #   token_of_interest_start_token=args.token_of_interest_start_token,
+    #   save_only_generated_tokens=args.save_only_generated_tokens,
+    #   data=hook_data, args=args,logger=logger
+    # )
+
+    # hook_postprocessing_function = hooks_postprocessing() = 
+    # save_hidden_states_to_file(
+    #   args=args,
+    #   data_keys=data_keys,
+    #   hook_name=hook_name,
+    #   data=hook_data, args=args,logger=logger
+    # )
+
+    # ==> get_hidden_states() run on each iteration; save_hidden_states_to_file() run after all iterations

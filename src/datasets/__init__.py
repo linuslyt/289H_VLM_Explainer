@@ -29,8 +29,9 @@ def get_dataset_loader(
         indices (list): The indices of the subset (if applicable) or an empty list.
     """
 
+    # TODO: update batch size
     batch_size = getattr(args, "batch_size", 1)
-
+    print(f"DataLoader batch size = {batch_size}")
     if dataset_name == "coco":
         dataset_cls = COCODataset
     elif dataset_name == "vqav2":
@@ -38,6 +39,7 @@ def get_dataset_loader(
     else:
         raise NotImplementedError(f"{dataset_name} is not implemented.")
 
+    # Initialize dataset
     dataset = dataset_cls(
         data_dir=args.data_dir,
         annotation_file=args.annotation_file,
@@ -58,6 +60,7 @@ def get_dataset_loader(
         logger.info(f"Successfully loaded {dataset_name}")
 
     if args.select_token_of_interest_samples:
+        # Extracts indices where the token of interest exists in the ground truth caption
         token_of_interest_indices = dataset.token_of_interest_idx_extractor(
             token_of_interest=args.token_of_interest,
             token_of_interest_key=args.token_of_interest_key,
@@ -67,9 +70,11 @@ def get_dataset_loader(
         )
         dataset_subset = Subset(dataset, token_of_interest_indices)
 
+        # Construct dataloader using extracted subset. No shuffling.
+        # pin_memory speeds up data transfer
         loader = DataLoader(
             dataset_subset,
-            batch_size=batch_size,
+            batch_size=args.batch_size,
             shuffle=False,
             num_workers=4,
             pin_memory=True,

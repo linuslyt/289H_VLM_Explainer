@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Path to your xl-vlms repository
-cd ~/xl-vlms
+cd ~/xai/xl-vlms
 
 model_name=llava-hf/llava-1.5-7b-hf
 #model_name=allenai/Molmo-7B-D-0924
@@ -12,10 +12,20 @@ model_name=llava-hf/llava-1.5-7b-hf
 analysis_name=decompose_activations_text_grounding_image_grounding
 
 # Specify path where you have saved features on training data
-saved_features_path=/home/parekh/features/save_hidden_states_for_token_of_interest_llava_dog_generation_split_train.pth
+# saved_features_path=/home/ytllam/xai/xl-vlms/out/features/save_hidden_states_for_token_of_interest_llava_dog_generation_split_train.pth
+# saved_features_path=/home/ytllam/xai/xl-vlms/out/features/save_hidden_states_for_token_of_interest_llava_dog_generation_split_train_single.pth
+# saved_features_path=/home/ytllam/xai/xl-vlms/out/features/save_hidden_states_for_token_of_interest_llava_dog_generation_split_train_single_old.pth
+# saved_features_path=/home/ytllam/xai/xl-vlms/out/features/save_hidden_states_for_token_of_interest_llava_dog_generation_split_train_batched.pth
+# saved_features_path=/home/ytllam/xai/xl-vlms/out/features/save_hidden_states_for_token_of_interest_llava_dog_generation_split_train_batched_old.pth
+saved_features_path=/home/ytllam/xai/xl-vlms/out/features/save_hidden_states_for_token_of_interest_llava_dog_generation_split_train_batched_new.pth
 
 # Where to store details about extracted concepts. Default directory is results/
-results_filename=results_train
+# results_filename=results_dog_train
+# results_filename=results_dog_train_single
+# results_filename=results_dog_train_batched
+# results_filename=results_dog_train_single_old
+# results_filename=results_dog_train_batched_old
+results_filename=results_dog_train_batched_new
 
 # Specify the specific feature module you want to decompose
 
