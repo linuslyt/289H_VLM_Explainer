@@ -421,6 +421,13 @@ def get_arguments(args: Dict = None):
         help="Path to the file with ids of samples to be filtered.",
     )
 
+    parser.add_argument(
+        "--programmatic",
+        default=False,
+        help="Set to True to disable running __main__ when imported. \
+              Use when importing function from module to call programmatically elsewhere."
+    )
+
     if args is not None:
         parser.set_defaults(**args)
         return parser.parse_args([])

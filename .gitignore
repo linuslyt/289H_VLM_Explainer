@@ -20,4 +20,4 @@ logs.log
 
 *.egg-info/
 out/
-scratch.py
+*scratch.py

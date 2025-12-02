@@ -15,16 +15,17 @@ from helpers.utils import (clear_forward_hooks, clear_hooks_variables,
 from models import get_model_class
 from models.image_text_model import ImageTextModel
 
-
 @torch.no_grad()
 def inference(
     loader: Callable,
     model_class: ImageTextModel,
-    hook_return_function: Callable,
+    hook_return_functions: Callable,
     device: torch.device,
     logger: Callable = None,
     args: argparse.Namespace = None,
 ) -> Tuple[List[Dict[str, Any]], List[bool]]:
+    if (args.programmatic):
+        log_args(args, logger)
 
     num_iterations = len(loader)
     hook_data = {}
@@ -89,8 +90,11 @@ def inference(
 
 
 if __name__ == "__main__":
-
     args = get_arguments()
+    # Don't run anything when importing this module. Used when importing inference() to be called programmatically elsewhere.
+    if args.programmatic:
+        exit()
+
     if args.batch_size <= 0:
         raise ValueError("Invalid batch size")
 
@@ -129,7 +133,7 @@ if __name__ == "__main__":
         loader=loader,
         model_class=model_class,
         device=device,
-        hook_return_function=hook_return_functions,
+        hook_return_functions=hook_return_functions,
         logger=logger,
         args=args,
     )

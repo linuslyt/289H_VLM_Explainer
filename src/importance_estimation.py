@@ -13,6 +13,8 @@ from helpers.utils import (clear_forward_hooks, clear_hooks_variables, get_most_
 from models import get_model_class
 from models.image_text_model import ImageTextModel
 
+from save_features import inference
+
 MODEL_NAME="llava-hf/llava-1.5-7b-hf"
 TARGET_FEATURE_MODULES=[["language_model.model.layers.31"]]
 # This hook extracts the hidden state from target module, 
@@ -24,8 +26,10 @@ DATASET_NAME="coco"
 DATA_DIR="/media/data/ytllam/coco"
 ANNOTATION_FILE="karpathy/dataset_coco.json"
 
-DATA_SPLIT="test"
-SUBSET_SIZE=5000
+INFERENCE_DATA_SPLIT="test"
+INFERENCE_SUBSET_SIZE=5000
+DICTIONARY_LEARNING_DATA_SPLIT="train"
+DICTIONARY_LEARNING_SUBSET_SIZE=5000 # full set is 82783
 TARGET_IMAGE=""
 TARGET_TOKEN="dog"
 SEED=28
@@ -33,20 +37,36 @@ OUT_DIR="/home/ytllam/xai/xl-vlms/out/gradient_concept"
 OUT_FILE="gradient_concept_test"
 LOG_FILE=os.path.join(os.path.join(OUT_DIR, f"importance_estimation_{datetime.now().strftime('%m-%d-%Y_%H-%M-%S')}_{TARGET_TOKEN}.log"))
 
+DEFAULT_ARGS = {
+    "model_name_or_path": MODEL_NAME,
+    "dataset_name": DATASET_NAME,
+    "dataset_size": "-1", # should be overridden
+    "data_dir": DATA_DIR,
+    "annotation_file": ANNOTATION_FILE,
+    "split": "test", # should be overridden
+    "hook_names": HOOK_NAMES,
+    "modules_to_hook": TARGET_FEATURE_MODULES,
+    # used to filter dataset to images where the token of interest exists in caption.
+    # we can set this to True so we only sample from those images for which we have a concept dictionary precomputed for.
+    "select_token_of_interest_samples": True,
+    "token_of_interest": TARGET_TOKEN,
+    # "save_dir": OUT_DIR,
+    # "save_filename": OUT_FILE,
+    "seed": SEED,
+    "processor_name": MODEL_NAME,
+    "generation_mode": True,
+    "exact_match_modules_to_hook": True,
+    "save_only_generated_tokens": True,
+    "batch_size": 1,
+}
+
 @torch.no_grad()
 def single_inference(
+    model_class: ImageTextModel,
     device: torch.device,
     logger: Callable = None,
     args: argparse.Namespace = None,
 ) -> Dict[str, Any]:
-    model_class = get_model_class(
-        args.model_name_or_path,
-        args.processor_name,
-        device=device,
-        logger=logger,
-        args=args,
-    )
-
     # hook_return_functions: run here manually after model inference
     # hook_postprocessing_functions: run outside of inference loop, e.g. to save hidden states
     hook_return_functions, hook_postprocessing_functions = setup_hooks(
@@ -107,44 +127,92 @@ def single_inference(
                 hook_output = func(**test_item)
                 if hook_output:
                     test_item.update(hook_output)
-    
+    clear_hooks_variables()
     return test_item
+
+def save_concept_dict_for_token(
+    model_class: ImageTextModel,
+    device: torch.device,
+    logger: Callable = None,
+    args: argparse.Namespace = None,
+):
+    hook_return_functions, hook_postprocessing_functions = setup_hooks(
+        model=model_class.model_,
+        modules_to_hook=args.modules_to_hook,
+        hook_names=args.hook_names,
+        tokenizer=model_class.get_tokenizer(),
+        logger=logger,
+        args=args,
+    )
+    loader = get_dataset_loader(
+        dataset_name=args.dataset_name, logger=logger, args=args,
+    )
+
+    hook_data = inference(
+        loader=loader,
+        model_class=model_class,
+        hook_return_functions=hook_return_functions,
+        device=device,
+        logger=logger,
+        args=args,
+    )
+
+    return hook_data
+
 
 if __name__ == "__main__":
     logger = setup_logger(LOG_FILE)
     set_seed(SEED)
     device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
-    logger.info(f"Torch: using device={device} gpu={torch.cuda.is_available()}")
 
-    inference_args = get_arguments({
-        "model_name_or_path": MODEL_NAME,
-        "dataset_name": DATASET_NAME,
-        "dataset_size": SUBSET_SIZE,
-        "data_dir": DATA_DIR,
-        "annotation_file": ANNOTATION_FILE,
-        "split": DATA_SPLIT,
-        "hook_names": HOOK_NAMES,
-        "modules_to_hook": TARGET_FEATURE_MODULES,
-        # used to filter dataset to images where the token of interest exists in caption.
-        # we can set this to True so we only sample from those images for which we have a concept dictionary precomputed for.
-        "select_token_of_interest_samples": True,
-        "token_of_interest": TARGET_TOKEN,
-        "save_dir": OUT_DIR,
-        "save_filename": OUT_FILE,
-        "seed": SEED,
-        "processor_name": MODEL_NAME,
-        "generation_mode": True,
-        "exact_match_modules_to_hook": True,
-        "save_only_generated_tokens": True,
+    model_setup_args = get_arguments({
+        **DEFAULT_ARGS,
     })
+    llava_model = get_model_class(
+        model_name_or_path=MODEL_NAME,
+        processor_name=MODEL_NAME,
+        device=device,
+        logger=logger,
+        args=model_setup_args, # larger arg dict not needed for model setup
+    )
+    logger.info(f"Loaded model={MODEL_NAME} on device={device} gpu={torch.cuda.is_available()}")
 
+    logger.info(f"Running inference for single input...")
+    inference_args = get_arguments({
+        **DEFAULT_ARGS,
+        "dataset_size": INFERENCE_SUBSET_SIZE,
+        "split": INFERENCE_DATA_SPLIT,
+    })
     test_item = single_inference(
+        model_class=llava_model,
         device=device,
         logger=logger,
         args=inference_args,
     )
+    # reset hooks so model can be reused
+    clear_forward_hooks(llava_model.model_)
 
-    print(test_item)
+    # print(test_item)
+    # Should match save_features.sh
+    logger.info(f"Extracting training features for selected token...")
+    concept_dict_mining_args = get_arguments({
+        **DEFAULT_ARGS,
+        "dataset_size": DICTIONARY_LEARNING_SUBSET_SIZE,
+        "split": DICTIONARY_LEARNING_DATA_SPLIT,
+        "save_dir": OUT_DIR,
+        "save_filename": OUT_FILE,
+        "batch_size": 26,
+        "programmatic": True,
+    })
+
+    # TODO: select token in item's caption
+    concept_dict_for_token = save_concept_dict_for_token(
+        model_class=llava_model,
+        device=device,
+        logger=logger,
+        args=concept_dict_mining_args,
+    )
+    print(concept_dict_for_token)
 
 # create_concept_dict_for_token()
 # TODO: generate concept dict for token in output. use save_features then feature_decomposition. 
