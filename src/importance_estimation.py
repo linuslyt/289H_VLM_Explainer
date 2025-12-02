@@ -9,11 +9,14 @@ from datasets import get_dataset_loader
 from helpers.arguments import get_arguments
 from helpers.logger import log_args, setup_logger
 from helpers.utils import (clear_forward_hooks, clear_hooks_variables, get_most_free_gpu,
-                           set_seed, setup_hooks)
+                           set_seed, setup_hooks, update_dict_of_list)
 from models import get_model_class
 from models.image_text_model import ImageTextModel
 
 from save_features import inference
+from analysis import analyse_features
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 MODEL_NAME="llava-hf/llava-1.5-7b-hf"
 TARGET_FEATURE_MODULES=[["language_model.model.layers.31"]]
@@ -34,8 +37,8 @@ TARGET_IMAGE=""
 TARGET_TOKEN="dog"
 SEED=28
 OUT_DIR="/home/ytllam/xai/xl-vlms/out/gradient_concept"
-OUT_FILE="gradient_concept_test"
 LOG_FILE=os.path.join(os.path.join(OUT_DIR, f"importance_estimation_{datetime.now().strftime('%m-%d-%Y_%H-%M-%S')}_{TARGET_TOKEN}.log"))
+DICT_ANALYSIS_NAME="decompose_activations_text_grounding_image_grounding"
 
 DEFAULT_ARGS = {
     "model_name_or_path": MODEL_NAME,
@@ -50,8 +53,8 @@ DEFAULT_ARGS = {
     # we can set this to True so we only sample from those images for which we have a concept dictionary precomputed for.
     "select_token_of_interest_samples": True,
     "token_of_interest": TARGET_TOKEN,
-    # "save_dir": OUT_DIR,
-    # "save_filename": OUT_FILE,
+    "save_dir": OUT_DIR,
+    "save_filename": "",
     "seed": SEED,
     "processor_name": MODEL_NAME,
     "generation_mode": True,
@@ -67,6 +70,7 @@ def single_inference(
     logger: Callable = None,
     args: argparse.Namespace = None,
 ) -> Dict[str, Any]:
+    log_args(args, logger)
     # hook_return_functions: run here manually after model inference
     # hook_postprocessing_functions: run outside of inference loop, e.g. to save hidden states
     hook_return_functions, hook_postprocessing_functions = setup_hooks(
@@ -127,8 +131,19 @@ def single_inference(
                 hook_output = func(**test_item)
                 if hook_output:
                     test_item.update(hook_output)
+
+    hook_data = update_dict_of_list(test_item, data={}, is_batched=False)
     clear_hooks_variables()
-    return test_item
+
+    clear_forward_hooks(llava_model.model_) # reset hooks so model can be reused
+
+    # Save features to file
+    if hook_postprocessing_functions is not None:
+        for func in hook_postprocessing_functions:
+            if func is not None:
+                func(data=hook_data, args=args, logger=logger)
+    
+    return hook_data
 
 def save_concept_dict_for_token(
     model_class: ImageTextModel,
@@ -157,6 +172,14 @@ def save_concept_dict_for_token(
         args=args,
     )
 
+    clear_forward_hooks(llava_model.model_) # reset hooks so model can be reused
+
+    # Save features to file
+    if hook_postprocessing_functions is not None:
+        for func in hook_postprocessing_functions:
+            if func is not None:
+                func(data=hook_data, args=args, logger=logger)
+    
     return hook_data
 
 
@@ -165,6 +188,7 @@ if __name__ == "__main__":
     set_seed(SEED)
     device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
 
+    logger.info(f"Loading model={MODEL_NAME} on device={device}, gpu={torch.cuda.is_available()}...")
     model_setup_args = get_arguments({
         **DEFAULT_ARGS,
     })
@@ -175,11 +199,13 @@ if __name__ == "__main__":
         logger=logger,
         args=model_setup_args, # larger arg dict not needed for model setup
     )
-    logger.info(f"Loaded model={MODEL_NAME} on device={device} gpu={torch.cuda.is_available()}")
 
     logger.info(f"Running inference for single input...")
+    # TODO: replace 'test' with img filename
+    inference_out_file = f"llava_input_inference_{DATASET_NAME}_{INFERENCE_DATA_SPLIT}_{'test'}"
     inference_args = get_arguments({
         **DEFAULT_ARGS,
+        "save_filename": inference_out_file,
         "dataset_size": INFERENCE_SUBSET_SIZE,
         "split": INFERENCE_DATA_SPLIT,
     })
@@ -189,39 +215,74 @@ if __name__ == "__main__":
         logger=logger,
         args=inference_args,
     )
-    # reset hooks so model can be reused
-    clear_forward_hooks(llava_model.model_)
-
     # print(test_item)
-    # Should match save_features.sh
-    logger.info(f"Extracting training features for selected token...")
-    concept_dict_mining_args = get_arguments({
+
+    # TODO: select token in item's caption
+    # TODO: skip if file already found
+    logger.info(f"Extracting hidden states for selected token samples...")
+    feature_out_file = f"llava_sampled_hidden_states_{DATASET_NAME}_{DICTIONARY_LEARNING_DATA_SPLIT}_{TARGET_TOKEN}"
+    concept_dict_mining_args = get_arguments({ # Should match save_features.sh
         **DEFAULT_ARGS,
         "dataset_size": DICTIONARY_LEARNING_SUBSET_SIZE,
         "split": DICTIONARY_LEARNING_DATA_SPLIT,
         "save_dir": OUT_DIR,
-        "save_filename": OUT_FILE,
+        "save_filename": feature_out_file,
         "batch_size": 26,
         "programmatic": True,
     })
-
-    # TODO: select token in item's caption
-    concept_dict_for_token = save_concept_dict_for_token(
+    global_hidden_states_for_token = save_concept_dict_for_token(
         model_class=llava_model,
         device=device,
         logger=logger,
         args=concept_dict_mining_args,
     )
-    print(concept_dict_for_token)
+    # print(concept_dict_for_token)
 
-# create_concept_dict_for_token()
-# TODO: generate concept dict for token in output. use save_features then feature_decomposition. 
-#       need separate arg namespace to change dataloader split to train, and batch size.
-
-# create_concept_dicts_for_caption()
-# TODO (stretch goal): get concept dict for every word in caption
+    logger.info(f"Learning concept dictionary for extracted features for selected token...")
+    concept_dict_out_file = f"llava_concept_dict_{DATASET_NAME}_{DICTIONARY_LEARNING_DATA_SPLIT}_{TARGET_TOKEN}"
+    concept_dict_mining_args = get_arguments({ # Should match feature_decomposition.sh
+        **DEFAULT_ARGS,
+        "dataset_size": DICTIONARY_LEARNING_SUBSET_SIZE,
+        "split": DICTIONARY_LEARNING_DATA_SPLIT,
+        "features_path": os.path.join(OUT_DIR, "features", f"{HOOK_NAMES[0]}_{feature_out_file}.pth"), # see utils.py save_hidden_states_to_file()
+        "save_dir": os.path.join(OUT_DIR, "concept_dicts"),
+        "save_filename": concept_dict_out_file, #saves to os.path.join(OUT_DIR, "concept_dicts"), f"{DICT_ANALYSIS_NAME}_{save_filename}.pth")
+        "batch_size": 26,
+        "programmatic": True,
+        "analysis_name": DICT_ANALYSIS_NAME, # generates concepts for the selected token across relevant samples in whole dataset, 
+                                             # then grounds each concept textually and visually
+        "module_to_decompose": TARGET_FEATURE_MODULES[0][0],
+        "num_concepts": [20], # why the hell is nargs="+"??
+        "decomposition_method": "snmf",
+    })
+    log_args(concept_dict_mining_args, logger)
+    dict_learning_device = torch.device("cpu")
+    dict_learning_model = get_model_class(
+        model_name_or_path=MODEL_NAME,
+        processor_name=MODEL_NAME,
+        device=dict_learning_device,
+        logger=logger,
+        args=model_setup_args,
+    )
+    global_concept_dict_for_token = analyse_features(
+        analysis_name=concept_dict_mining_args.analysis_name,
+        logger=logger,
+        model_class=dict_learning_model,
+        device=dict_learning_device,
+        args=concept_dict_mining_args,
+    )
+    print(global_concept_dict_for_token.keys())
 
 # project_on_concept_dict()
+# TODO: project input instance representation onto concept dict
+# analyse_features returns a result_dict. 
+# decompose_and_ground_activations() (feature_decomposition.py:62) saves to this result_dict
+# the model used for dictionary learning.
+#
+#     grounding_dict["analysis_model"] = decomposition_model
+#     results_dict.update(grounding_dict)
+#
+# This can be used as follows (concepts_dict now returned from analyse_features, or can be loaded from file)
 # Use analysis_decomposition.project_representations(). see ipynb
 # projections = analysis_decomposition.project_representations(
 #     sample=feat,
@@ -233,9 +294,20 @@ if __name__ == "__main__":
 # where feat = get_feature_matrix(data["hidden_states"], module_name="model.norm", token_idx=None)
 # hidden_states expects list of dicts [{}]. just wrap our instance in list
 
+# TODO: calculate gradient and gradient * concept
 # reconstruct_differentiable_hidden_state()
+# get each concept's activations: projected_input @ concept_dict
+# reconstruct hidden state in terms of concept activations: torch.tensor(requires_grad=True) for llava model
+# Patch into model by setting hook of forward layer to override hidden state with the above
 
 # calculate_gradient_concept()
+# take the scalar logit of selected token t in output caption
+# backpropagate by calling backward() on the logit
+# compute gradient by detaching reconstructed hidden state tensor and @ concept dict
+# compute importance values by doing gradient * concept activation.squeeze()
 
 # create_groundings()
 # see concept_grounding_visualization.ipynb 
+
+# create_concept_dicts_for_caption()
+# TODO (stretch goal): get concept dict for every word in caption

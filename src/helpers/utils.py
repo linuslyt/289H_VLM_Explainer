@@ -462,6 +462,7 @@ def save_hidden_states_to_file(
             ), f"{data_key} not found in data, there is only: {data.keys()}"
 
             saved_data[data_key] = data[data_key]  # List[Any]
+    os.makedirs(os.path.join(args.save_dir, "features"), exist_ok=True)
     file_name = os.path.join(
         args.save_dir, "features", f"{hook_name}_{args.save_filename}.pth"
     )
