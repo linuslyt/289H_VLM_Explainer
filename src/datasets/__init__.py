@@ -29,7 +29,6 @@ def get_dataset_loader(
         indices (list): The indices of the subset (if applicable) or an empty list.
     """
 
-    # TODO: update batch size
     batch_size = getattr(args, "batch_size", 1)
     print(f"DataLoader batch size = {batch_size}")
     if dataset_name == "coco":

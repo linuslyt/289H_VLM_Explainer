@@ -19,3 +19,5 @@ logs.log
 *.pth
 
 *.egg-info/
+out/
+scratch.py

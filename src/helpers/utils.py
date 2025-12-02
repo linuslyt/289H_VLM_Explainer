@@ -387,7 +387,6 @@ def extract_states_before_special_tokens(
     )
     return v_selected, no_token_found_mask
 
-# TODO: proper fix: modify for batching
 def get_hidden_states(
     token_idx: int = None,
     token_start_end_idx: List[List[int]] = None,
@@ -447,7 +446,6 @@ def get_hidden_states(
     output["hidden_states"] = hidden_states
     return output
 
-# TODO: proper fix: modify for batching
 def save_hidden_states_to_file(
     data: Dict[str, Any],
     data_keys: List[str] = ["hidden_states"],
@@ -615,6 +613,7 @@ def register_hooks(
         warnings.warn(f"{hook_name} is not supported. No hooks attached to model.")
     if hook_function is not None:
         hooked_modules = []
+        # Register forward hooks for module
         for name, module in model.named_modules():
             if fmatch(
                 name, modules_to_hook, exact_match=args.exact_match_modules_to_hook
@@ -705,3 +704,23 @@ def setup_hooks(
         hook_postprocessing_functions.append(hook_postprocessing_function)
 
     return hook_return_functions, hook_postprocessing_functions
+
+def get_most_free_gpu():
+    if not torch.cuda.is_available():
+        print("CUDA is not available. No GPU devices found.")
+        return -1
+
+    num_gpus = torch.cuda.device_count()
+    if num_gpus == 0:
+        print("CUDA is not available. No GPU devices found.")
+        return -1
+
+    max_free_memory = -1
+    for i in range(num_gpus):
+        # mem_get_info returns (free_memory_in_bytes, total_memory_in_bytes)
+        free_memory, total_memory = torch.cuda.memory.mem_get_info(i)
+        if free_memory > max_free_memory:
+            max_free_memory = free_memory
+            freest_gpu_index = i
+            
+    return freest_gpu_index

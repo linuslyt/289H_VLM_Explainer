@@ -1,5 +1,5 @@
 import argparse
-from typing import List
+from typing import List, Dict
 
 __all__ = ["get_arguments"]
 
@@ -9,7 +9,7 @@ def parse_list_of_lists(arg):
     return list_of_lists
 
 
-def get_arguments():
+def get_arguments(args: Dict = None):
     parser = argparse.ArgumentParser(description="XL-VLMs arguments parser")
 
     # General
@@ -420,5 +420,9 @@ def get_arguments():
         default=None,
         help="Path to the file with ids of samples to be filtered.",
     )
+
+    if args is not None:
+        parser.set_defaults(**args)
+        return parser.parse_args([])
 
     return parser.parse_args()
