@@ -15,7 +15,7 @@ from models.image_text_model import ImageTextModel
 
 from save_features import inference
 from analysis import analyse_features
-
+from analysis.feature_decomposition import get_feature_matrix, project_representations
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 MODEL_NAME="llava-hf/llava-1.5-7b-hf"
@@ -238,6 +238,7 @@ if __name__ == "__main__":
     )
     # print(concept_dict_for_token)
 
+    # TODO: skip if file already found
     logger.info(f"Learning concept dictionary for extracted features for selected token...")
     concept_dict_out_file = f"llava_concept_dict_{DATASET_NAME}_{DICTIONARY_LEARNING_DATA_SPLIT}_{TARGET_TOKEN}"
     concept_dict_mining_args = get_arguments({ # Should match feature_decomposition.sh
@@ -272,42 +273,44 @@ if __name__ == "__main__":
         args=concept_dict_mining_args,
     )
     print(global_concept_dict_for_token.keys())
+    # analyse_features returns a dict with dict_keys(['concepts', 'activations',
+    #   'decomposition_method', 'text_grounding', 'image_grounding_paths', 'analysis_model'])
+    # d["analysis_model"] = decomposition_model used for smnf learning. this can be used to project any new features
+    # onto the concept dictionary.
 
-# project_on_concept_dict()
-# TODO: project input instance representation onto concept dict
-# analyse_features returns a result_dict. 
-# decompose_and_ground_activations() (feature_decomposition.py:62) saves to this result_dict
-# the model used for dictionary learning.
-#
-#     grounding_dict["analysis_model"] = decomposition_model
-#     results_dict.update(grounding_dict)
-#
-# This can be used as follows (concepts_dict now returned from analyse_features, or can be loaded from file)
-# Use analysis_decomposition.project_representations(). see ipynb
-# projections = analysis_decomposition.project_representations(
-#     sample=feat,
-#     analysis_model=concepts_dict["analysis_model"],
-#     decomposition_type=concepts_dict["decomposition_method"],
-# )
-# their 143 input samples: projections.shape (143, 20) feat.shape torch.Size([143, 3584]) no. hidden states 143
-# we should have 1 input sample, so we should get (1, n_concepts=20), (1, feature_dims), and 1 respectively
-# where feat = get_feature_matrix(data["hidden_states"], module_name="model.norm", token_idx=None)
-# hidden_states expects list of dicts [{}]. just wrap our instance in list
+    # From concept_grounding_visualization.ipynb example
+    logger.info(f"Projecting test instance hidden representation w/r/t selected token onto concept dict...")
+    data = torch.load(os.path.join(OUT_DIR, "features", f"{HOOK_NAMES[0]}_{inference_out_file}.pth"), map_location="cpu")
+    feat = get_feature_matrix(data["hidden_states"], module_name="language_model.model.layers.31", token_idx=None)
+    projections = project_representations(
+        sample=feat,
+        analysis_model=global_concept_dict_for_token["analysis_model"],
+        decomposition_type=global_concept_dict_for_token["decomposition_method"],
+    )
+    # With 1 input sample, we should get (1, n_concepts=20), (1, feature_dims), and 1 respectively
+    print(projections.shape, feat.shape, len(data["hidden_states"]))
+    print(projections)
 
-# TODO: calculate gradient and gradient * concept
-# reconstruct_differentiable_hidden_state()
-# get each concept's activations: projected_input @ concept_dict
-# reconstruct hidden state in terms of concept activations: torch.tensor(requires_grad=True) for llava model
-# Patch into model by setting hook of forward layer to override hidden state with the above
+    v_X = projections[0]
+    h_recon = v_X @ global_concept_dict_for_token["concepts"]
+    print(h_recon)
+    h_recon_torch = torch.tensor(h_recon, requires_grad=True)
+    # TODO: calculate gradient and gradient * concept
+    # reconstruct_differentiable_hidden_state()
+    # get each concept's activations: projected_input @ concept_dict
+    # reconstruct hidden state in terms of concept activations: torch.tensor(requires_grad=True) for llava model
+    # Patch into model by setting hook of forward layer to override hidden state with the above
 
-# calculate_gradient_concept()
-# take the scalar logit of selected token t in output caption
-# backpropagate by calling backward() on the logit
-# compute gradient by detaching reconstructed hidden state tensor and @ concept dict
-# compute importance values by doing gradient * concept activation.squeeze()
+    # calculate_gradient_concept()
+    # take the scalar logit of selected token t in output caption
+    # backpropagate by calling backward() on the logit
+    # compute gradient by detaching reconstructed hidden state tensor and @ concept dict
+    # compute importance values by doing gradient * concept activation.squeeze()
 
-# create_groundings()
-# see concept_grounding_visualization.ipynb 
+    # create_groundings()
+    # see concept_grounding_visualization.ipynb 
 
-# create_concept_dicts_for_caption()
-# TODO (stretch goal): get concept dict for every word in caption
+    # create_concept_dicts_for_caption()
+    
+    # TODO: cut down number of concepts
+    # TODO (stretch goal): get concept dict for every word in caption
