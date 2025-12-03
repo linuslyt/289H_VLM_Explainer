@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Runs dictionary learning to generate concept dictionary and activations,
+# given previously saved hidden states for the token of interest (save_features.sh)
+
 # Path to your xl-vlms repository
 cd ~/xai/xl-vlms
 

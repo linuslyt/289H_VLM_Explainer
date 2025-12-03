@@ -4,13 +4,15 @@ from datetime import datetime
 import torch
 from tqdm import tqdm
 from typing import Any, Callable, Dict, List, Tuple
+import copy
 
 from datasets import get_dataset_loader
 from helpers.arguments import get_arguments
 from helpers.logger import log_args, setup_logger
 from helpers.utils import (clear_forward_hooks, clear_hooks_variables, get_most_free_gpu,
+                           get_vocab_idx_of_target_token, get_first_pos_of_token_of_interest,
                            set_seed, setup_hooks, update_dict_of_list)
-from models import get_model_class
+from models import get_model_class, get_module_by_path
 from models.image_text_model import ImageTextModel
 
 from save_features import inference
@@ -69,7 +71,7 @@ def single_inference(
     device: torch.device,
     logger: Callable = None,
     args: argparse.Namespace = None,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Any]: # TODO: get proper type of input
     log_args(args, logger)
     # hook_return_functions: run here manually after model inference
     # hook_postprocessing_functions: run outside of inference loop, e.g. to save hidden states
@@ -106,6 +108,7 @@ def single_inference(
         response="", # not provided bc we're doing generation
         generation_mode=args.generation_mode
     )
+    preprocessed_input = copy.deepcopy(input_instance)
 
     model = model_class.get_model()
     out = model.generate(
@@ -143,9 +146,10 @@ def single_inference(
             if func is not None:
                 func(data=hook_data, args=args, logger=logger)
     
-    return hook_data
+    return hook_data, preprocessed_input
 
-def save_concept_dict_for_token(
+@torch.no_grad()
+def get_hidden_states_of_relevant_samples(
     model_class: ImageTextModel,
     device: torch.device,
     logger: Callable = None,
@@ -209,13 +213,16 @@ if __name__ == "__main__":
         "dataset_size": INFERENCE_SUBSET_SIZE,
         "split": INFERENCE_DATA_SPLIT,
     })
-    test_item = single_inference(
+    test_item, preprocessed_test_input = single_inference(
         model_class=llava_model,
         device=device,
         logger=logger,
         args=inference_args,
     )
     # print(test_item)
+    # preprocessed test input (type=<class 'transformers.feature_extraction_utils.BatchFeature'>)
+    print(f"preprocessed test input (type={type(preprocessed_test_input)})")
+    print(preprocessed_test_input)
 
     # TODO: select token in item's caption
     # TODO: skip if file already found
@@ -230,7 +237,7 @@ if __name__ == "__main__":
         "batch_size": 26,
         "programmatic": True,
     })
-    global_hidden_states_for_token = save_concept_dict_for_token(
+    global_hidden_states_for_token = get_hidden_states_of_relevant_samples(
         model_class=llava_model,
         device=device,
         logger=logger,
@@ -278,8 +285,9 @@ if __name__ == "__main__":
     # d["analysis_model"] = decomposition_model used for smnf learning. this can be used to project any new features
     # onto the concept dictionary.
 
-    # From concept_grounding_visualization.ipynb example
+
     logger.info(f"Projecting test instance hidden representation w/r/t selected token onto concept dict...")
+    # From concept_grounding_visualization.ipynb example
     data = torch.load(os.path.join(OUT_DIR, "features", f"{HOOK_NAMES[0]}_{inference_out_file}.pth"), map_location="cpu")
     feat = get_feature_matrix(data["hidden_states"], module_name="language_model.model.layers.31", token_idx=None)
     projections = project_representations(
@@ -292,25 +300,78 @@ if __name__ == "__main__":
     print(projections)
 
     v_X = projections[0]
+    # TypeError: unsupported operand type(s) for @: 'numpy.ndarray' and 'Tensor'
     h_recon = v_X @ global_concept_dict_for_token["concepts"]
     print(h_recon)
     h_recon_torch = torch.tensor(h_recon, requires_grad=True)
-    # TODO: calculate gradient and gradient * concept
-    # reconstruct_differentiable_hidden_state()
-    # get each concept's activations: projected_input @ concept_dict
-    # reconstruct hidden state in terms of concept activations: torch.tensor(requires_grad=True) for llava model
-    # Patch into model by setting hook of forward layer to override hidden state with the above
 
-    # calculate_gradient_concept()
-    # take the scalar logit of selected token t in output caption
-    # backpropagate by calling backward() on the logit
-    # compute gradient by detaching reconstructed hidden state tensor and @ concept dict
-    # compute importance values by doing gradient * concept activation.squeeze()
+    # TODO: refactor into reconstruct_differentiable_hidden_state()
 
-    # create_groundings()
+    target_token_vocab_idx = get_vocab_idx_of_target_token()
+    target_token_first_idx_in_generated_output = get_first_pos_of_token_of_interest() # TODO
+    # get_concept_grad_at_target_token_step(
+    #     model=llava_model,
+    #     test_input=preprocessed_test_input,
+    #     token_index=target_token_first_idx_in_generated_output
+    #     h_recon_torch=h_recon_torch,
+    #     target_id=target_token_vocab_idx,
+    # )
+
+exit()
+
+# UNTESTED
+def get_concept_grad_at_target_token_step(
+    model,
+    test_input, # preprocessed_test_input
+    token_index, # token_index is the index of the token in the generated tokens (i.e. not including prompt tokens).
+                 # this SHOULD be the same index returned by get_first_pos_of_token_of_interest().
+    h_recon_torch, # hidden state of test item for target token, projected onto global concept dictionary for target token
+    target_id, # vocabulary index of target token. should be from get_vocab_idx_of_target_token()
+):
+
+    layer_name = "language_model.model.layers.31"
+    target_layer = get_module_by_path(model, layer_name)
+
+    def replace_token_hidden_state(module, input, output):
+        # TODO: only patch during the step where the target token is generated
+        out = output.clone()
+        out[0, :, :] = output[0]   # keep unchanged
+        out[0, token_index, :] = h_recon_torch   # patch
+        return out
+
+    hook = target_layer.register_forward_hook(replace_token_hidden_state)
+
+    with torch.enable_grad():
+        gen_out = model.generate(
+            **test_input,
+            max_new_tokens=50, # TODO: args.max_new_tokens
+            do_sample=False,
+            # To get output logits for every token, and at every step
+            output_scores=True,
+            return_dict_in_generate=True,
+            # To get gradients
+            use_cache=False,     # needed for gradients
+        )
+
+    # extract logit for the target token at the step where it was generated
+    target_logit = gen_out.scores[token_index][0, target_id]
+
+    # compute gradient of logit wrt hidden state
+    model.zero_grad()
+    target_logit.backward()
+
+    grad_h = h_recon_torch.grad.detach().cpu()
+
+    # TODO: compute gradient of logit wrt concept vectors (mult by Z?)
+    # TODO: compute gradient * concept activation --> concept importance
+    hook.remove()
+    return grad_h
+
+# TODO: return groundings with 1) indexes sorted by activations and 2) indexes sorted by importances
+# rank_and_ground_concepts()
     # see concept_grounding_visualization.ipynb 
-
-    # create_concept_dicts_for_caption()
     
-    # TODO: cut down number of concepts
-    # TODO (stretch goal): get concept dict for every word in caption
+
+# TODO: cut down number of concepts
+# TODO (stretch goal): get concept dict for every word in caption
+# TODO: maybe add plural version of token(?) but it maaaay change the "concept"
