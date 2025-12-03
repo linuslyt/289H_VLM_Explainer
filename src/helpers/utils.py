@@ -301,7 +301,7 @@ def get_first_pos_of_token_of_interest(
     tokens: torch.Tensor, # hidden state saved by forward hook at selected module. under test_item.hidden_states.get("module_name")[0]
     pred_tokens: torch.Tensor, # saved to `model_output` key of input item
     target_token_vocab_idx: Union[int, torch.Tensor] = None, # index of the target token in the model vocabulary. from get_vocab_idx_of_target_token
-) -> torch.LongTensor:
+) -> torch.LongTensor: # index of the target token in the entire model output, INCLUDING caption tokens.
     # If the token_of_interest splits into different ids, we consider the first one (while skipping eos/bos tokens)
     if not isinstance(target_token_vocab_idx, torch.Tensor):
         target_token_vocab_idx = torch.tensor([target_token_vocab_idx])
