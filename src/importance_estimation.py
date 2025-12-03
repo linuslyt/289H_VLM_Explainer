@@ -36,7 +36,7 @@ INFERENCE_SUBSET_SIZE=5000
 DICTIONARY_LEARNING_DATA_SPLIT="train"
 DICTIONARY_LEARNING_SUBSET_SIZE=5000 # full set is 82783
 TARGET_IMAGE=""
-TARGET_TOKEN="dog"
+TARGET_TOKEN="motorcycle" # NOTE: some tokens will cause dictionary learning to fail, e.g. "dogs" for some reason. not entirely sure why.
 SEED=28
 OUT_DIR="/home/ytllam/xai/xl-vlms/out/gradient_concept"
 LOG_FILE=os.path.join(os.path.join(OUT_DIR, f"importance_estimation_{datetime.now().strftime('%m-%d-%Y_%H-%M-%S')}_{TARGET_TOKEN}.log"))
@@ -65,13 +65,19 @@ DEFAULT_ARGS = {
     "batch_size": 1,
 }
 
+FORCE_RECOMPUTE=True # TODO: make script argument
+
 @torch.no_grad()
+# This runs inference with a target token and module, and registers a forward hook so that the hidden state
+# at the target module at the position after that token is first generated is saved.
+# TODO: create single inference function for initial user input that doesn't save anything, but uses the same seed, just so
+#       the user can select a token from the caption.
 def single_inference(
     model_class: ImageTextModel,
     device: torch.device,
     logger: Callable = None,
     args: argparse.Namespace = None,
-) -> Tuple[Dict[str, Any], Any]: # TODO: get proper type of input
+) -> Dict[str, Any]: # TODO: get proper type of input
     log_args(args, logger)
     # hook_return_functions: run here manually after model inference
     # hook_postprocessing_functions: run outside of inference loop, e.g. to save hidden states
@@ -92,7 +98,7 @@ def single_inference(
 
     # print(f"Dataset type: {loader.dataset}")
     coco_test_set = loader.dataset
-    test_item = coco_test_set[4]
+    test_item = coco_test_set[0]
     # e.g. for index 4: 
     # {'img_id': 'COCO_val2014_000000173081',
     #  'instruction': '\nProvide a one-sentence caption for the provided image.', 
@@ -109,6 +115,7 @@ def single_inference(
         generation_mode=args.generation_mode
     )
     preprocessed_input = copy.deepcopy(input_instance)
+    test_item["preprocessed_input"] = preprocessed_input
 
     model = model_class.get_model()
     out = model.generate(
@@ -139,14 +146,18 @@ def single_inference(
     clear_hooks_variables()
 
     clear_forward_hooks(llava_model.model_) # reset hooks so model can be reused
-
     # Save features to file
     if hook_postprocessing_functions is not None:
         for func in hook_postprocessing_functions:
             if func is not None:
-                func(data=hook_data, args=args, logger=logger)
+                func(data=hook_data, 
+                     data_keys=['img_id', 'instruction', 'response', 'image',
+                                'targets', 'text', 'preprocessed_input', 
+                                'model_output', 'model_generated_output', 'model_predictions',
+                                'token_of_interest_mask', 'hidden_states'], # save all fields, not just hidden_states
+                     args=args, logger=logger)
     
-    return hook_data, preprocessed_input
+    return hook_data
 
 @torch.no_grad()
 def get_hidden_states_of_relevant_samples(
@@ -204,91 +215,112 @@ if __name__ == "__main__":
         args=model_setup_args, # larger arg dict not needed for model setup
     )
 
-    logger.info(f"Running inference for single input...")
-    # TODO: replace 'test' with img filename
-    inference_out_file = f"llava_input_inference_{DATASET_NAME}_{INFERENCE_DATA_SPLIT}_{'test'}"
+    if FORCE_RECOMPUTE:
+        logger.info(f"FORCE_RECOMPUTE={FORCE_RECOMPUTE}, recomputing all files")
+
+    # TODO: replace 'INFERENCE_DATA_SPLIT' with img filename
+    # TODO: add call for single inference without hooks. save preprocessed_test_input from that run along with output caption.
+    #       user will select target token from that first inference
+    test_item_filename = f"llava_input_inference_{DATASET_NAME}_{INFERENCE_DATA_SPLIT}_{TARGET_TOKEN}"
     inference_args = get_arguments({
         **DEFAULT_ARGS,
-        "save_filename": inference_out_file,
+        "save_filename": test_item_filename,
         "dataset_size": INFERENCE_SUBSET_SIZE,
         "split": INFERENCE_DATA_SPLIT,
+        "token_of_interest": TARGET_TOKEN,
     })
-    test_item, preprocessed_test_input = single_inference(
-        model_class=llava_model,
-        device=device,
-        logger=logger,
-        args=inference_args,
-    )
+    test_item_final_path = os.path.join(OUT_DIR, "features", f"{HOOK_NAMES[0]}_{test_item_filename}.pth")
+    if os.path.exists(test_item_final_path) and not FORCE_RECOMPUTE:
+        logger.info(f"Loaded test item from {test_item_final_path}")
+        test_item = torch.load(test_item_final_path)
+    else:
+        logger.info(f"Running inference for single input...")
+        test_item = single_inference(
+            model_class=llava_model,
+            device=device,
+            logger=logger,
+            args=inference_args,
+        )
+    preprocessed_test_input = test_item["preprocessed_input"]
     # print(test_item)
+    # print(f"preprocessed test input (type={type(preprocessed_test_input)})")
     # preprocessed test input (type=<class 'transformers.feature_extraction_utils.BatchFeature'>)
-    print(f"preprocessed test input (type={type(preprocessed_test_input)})")
-    print(preprocessed_test_input)
+    # print(preprocessed_test_input)
 
     # TODO: select token in item's caption
-    # TODO: skip if file already found
-    logger.info(f"Extracting hidden states for selected token samples...")
-    feature_out_file = f"llava_sampled_hidden_states_{DATASET_NAME}_{DICTIONARY_LEARNING_DATA_SPLIT}_{TARGET_TOKEN}"
-    concept_dict_mining_args = get_arguments({ # Should match save_features.sh
-        **DEFAULT_ARGS,
-        "dataset_size": DICTIONARY_LEARNING_SUBSET_SIZE,
-        "split": DICTIONARY_LEARNING_DATA_SPLIT,
-        "save_dir": OUT_DIR,
-        "save_filename": feature_out_file,
-        "batch_size": 26,
-        "programmatic": True,
-    })
-    global_hidden_states_for_token = get_hidden_states_of_relevant_samples(
-        model_class=llava_model,
-        device=device,
-        logger=logger,
-        args=concept_dict_mining_args,
-    )
+    sampled_hidden_states_filename = f"llava_sampled_hidden_states_{DATASET_NAME}_{DICTIONARY_LEARNING_DATA_SPLIT}_{TARGET_TOKEN}"
+    sampled_hidden_states_final_path = os.path.join(OUT_DIR, "features", f"{HOOK_NAMES[0]}_{sampled_hidden_states_filename}.pth")
+    if os.path.exists(sampled_hidden_states_final_path) and not FORCE_RECOMPUTE:
+        logger.info(f"Loaded sample hidden states from {sampled_hidden_states_final_path}")
+        sampled_hidden_states = torch.load(sampled_hidden_states_final_path)
+    else:
+        logger.info(f"Extracting hidden states for selected token samples...")
+        hidden_state_sampling_args = get_arguments({ # Should match save_features.sh
+            **DEFAULT_ARGS,
+            "dataset_size": DICTIONARY_LEARNING_SUBSET_SIZE,
+            "split": DICTIONARY_LEARNING_DATA_SPLIT,
+            "save_dir": OUT_DIR,
+            "save_filename": sampled_hidden_states_filename,
+            "batch_size": 26,
+            "programmatic": True,
+        })
+        sampled_hidden_states = get_hidden_states_of_relevant_samples(
+            model_class=llava_model,
+            device=device,
+            logger=logger,
+            args=hidden_state_sampling_args,
+        )
     # print(concept_dict_for_token)
 
-    # TODO: skip if file already found
-    logger.info(f"Learning concept dictionary for extracted features for selected token...")
-    concept_dict_out_file = f"llava_concept_dict_{DATASET_NAME}_{DICTIONARY_LEARNING_DATA_SPLIT}_{TARGET_TOKEN}"
-    concept_dict_mining_args = get_arguments({ # Should match feature_decomposition.sh
-        **DEFAULT_ARGS,
-        "dataset_size": DICTIONARY_LEARNING_SUBSET_SIZE,
-        "split": DICTIONARY_LEARNING_DATA_SPLIT,
-        "features_path": os.path.join(OUT_DIR, "features", f"{HOOK_NAMES[0]}_{feature_out_file}.pth"), # see utils.py save_hidden_states_to_file()
-        "save_dir": os.path.join(OUT_DIR, "concept_dicts"),
-        "save_filename": concept_dict_out_file, #saves to os.path.join(OUT_DIR, "concept_dicts"), f"{DICT_ANALYSIS_NAME}_{save_filename}.pth")
-        "batch_size": 26,
-        "programmatic": True,
-        "analysis_name": DICT_ANALYSIS_NAME, # generates concepts for the selected token across relevant samples in whole dataset, 
-                                             # then grounds each concept textually and visually
-        "module_to_decompose": TARGET_FEATURE_MODULES[0][0],
-        "num_concepts": [20], # why the hell is nargs="+"??
-        "decomposition_method": "snmf",
-    })
-    log_args(concept_dict_mining_args, logger)
-    dict_learning_device = torch.device("cpu")
-    dict_learning_model = get_model_class(
-        model_name_or_path=MODEL_NAME,
-        processor_name=MODEL_NAME,
-        device=dict_learning_device,
-        logger=logger,
-        args=model_setup_args,
-    )
-    global_concept_dict_for_token = analyse_features(
-        analysis_name=concept_dict_mining_args.analysis_name,
-        logger=logger,
-        model_class=dict_learning_model,
-        device=dict_learning_device,
-        args=concept_dict_mining_args,
-    )
+    concept_dict_filename = f"llava_concept_dict_{DATASET_NAME}_{DICTIONARY_LEARNING_DATA_SPLIT}_{TARGET_TOKEN}"
+    concept_dict_final_path = os.path.join(OUT_DIR, "concept_dicts", f"{DICT_ANALYSIS_NAME}_{concept_dict_filename}.pth")
+    if os.path.exists(concept_dict_final_path) and not FORCE_RECOMPUTE:
+        logger.info(f"Loaded concept dict from {concept_dict_final_path}")
+        global_concept_dict_for_token = torch.load(concept_dict_final_path)
+    else:
+        # /home/ytllam/xai/xl-vlms/out/gradient_concept/concept_dicts/decompose_activations_text_grounding_image_grounding_concept_dict_filename
+        logger.info(f"No concept dict found at {concept_dict_final_path}")
+        logger.info(f"Learning concept dictionary for extracted features for selected token...")
+        concept_dict_mining_args = get_arguments({ # Should match feature_decomposition.sh
+            **DEFAULT_ARGS,
+            "dataset_size": DICTIONARY_LEARNING_SUBSET_SIZE,
+            "split": DICTIONARY_LEARNING_DATA_SPLIT,
+            "features_path": sampled_hidden_states_final_path, # see utils.py save_hidden_states_to_file()
+            "save_dir": os.path.join(OUT_DIR, "concept_dicts"),
+            "save_filename": concept_dict_filename, #saves to os.path.join(OUT_DIR, "concept_dicts"), f"{DICT_ANALYSIS_NAME}_{save_filename}.pth")
+            "batch_size": 26,
+            "programmatic": True,
+            "analysis_name": DICT_ANALYSIS_NAME, # generates concepts for the selected token across relevant samples in whole dataset, 
+                                                # then grounds each concept textually and visually
+            "module_to_decompose": TARGET_FEATURE_MODULES[0][0],
+            "num_concepts": [20], # why the hell is nargs="+"??
+            "decomposition_method": "snmf",
+        })
+        log_args(concept_dict_mining_args, logger)
+        dict_learning_device = torch.device("cpu")
+        dict_learning_model = get_model_class(
+            model_name_or_path=MODEL_NAME,
+            processor_name=MODEL_NAME,
+            device=dict_learning_device,
+            logger=logger,
+            args=model_setup_args,
+        )
+        global_concept_dict_for_token = analyse_features(
+            analysis_name=concept_dict_mining_args.analysis_name,
+            logger=logger,
+            model_class=dict_learning_model,
+            device=dict_learning_device,
+            args=concept_dict_mining_args,
+        )
     print(global_concept_dict_for_token.keys())
     # analyse_features returns a dict with dict_keys(['concepts', 'activations',
     #   'decomposition_method', 'text_grounding', 'image_grounding_paths', 'analysis_model'])
     # d["analysis_model"] = decomposition_model used for smnf learning. this can be used to project any new features
     # onto the concept dictionary.
 
-
     logger.info(f"Projecting test instance hidden representation w/r/t selected token onto concept dict...")
     # From concept_grounding_visualization.ipynb example
-    data = torch.load(os.path.join(OUT_DIR, "features", f"{HOOK_NAMES[0]}_{inference_out_file}.pth"), map_location="cpu")
+    data = torch.load(test_item_final_path, map_location="cpu")
     feat = get_feature_matrix(data["hidden_states"], module_name="language_model.model.layers.31", token_idx=None)
     projections = project_representations(
         sample=feat,
@@ -299,16 +331,29 @@ if __name__ == "__main__":
     print(projections.shape, feat.shape, len(data["hidden_states"]))
     print(projections)
 
+    # TODO: refactor into reconstruct_differentiable_hidden_state()
+    target_token_vocab_idx = get_vocab_idx_of_target_token(TARGET_TOKEN, # TODO: args 
+                                                           args_token_of_interest_idx=None,
+                                                           tokenizer=llava_model.get_tokenizer())
+    # print(test_item)
+    # print(type(test_item))
+    target_token_first_idx_in_generated_output, no_token_found_mask = get_first_pos_of_token_of_interest(
+        tokens=test_item.get("hidden_states")[0].get("language_model.model.layers.31")[0],
+        pred_tokens=test_item.get("model_output")[0],
+        target_token_vocab_idx=target_token_vocab_idx, # index of the target token in the model vocabulary
+    )
+
+    # TODO: won't need this after dynamic token selection, but need to handle cases where target token is not in the generated output
+    print(f"vocab_idx={target_token_vocab_idx}")
+    print(f"target_token_first_idx={target_token_first_idx_in_generated_output}")
+    exit()
+
     v_X = projections[0]
     # TypeError: unsupported operand type(s) for @: 'numpy.ndarray' and 'Tensor'
     h_recon = v_X @ global_concept_dict_for_token["concepts"]
     print(h_recon)
     h_recon_torch = torch.tensor(h_recon, requires_grad=True)
 
-    # TODO: refactor into reconstruct_differentiable_hidden_state()
-
-    target_token_vocab_idx = get_vocab_idx_of_target_token()
-    target_token_first_idx_in_generated_output = get_first_pos_of_token_of_interest() # TODO
     # get_concept_grad_at_target_token_step(
     #     model=llava_model,
     #     test_input=preprocessed_test_input,
@@ -316,8 +361,6 @@ if __name__ == "__main__":
     #     h_recon_torch=h_recon_torch,
     #     target_id=target_token_vocab_idx,
     # )
-
-exit()
 
 # UNTESTED
 def get_concept_grad_at_target_token_step(

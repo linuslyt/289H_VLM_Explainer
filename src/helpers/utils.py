@@ -176,7 +176,7 @@ def compute_time_left(start_time, iteration: int, num_iterations: int):
     time_left = avg_time_per_iter * remaining_iters  # Estimated time left
     return time_left / 60
 
-def get_vocab_idx_of_target_token(token_of_interest, token_of_interest_idx, tokenizer):
+def get_vocab_idx_of_target_token(token_of_interest, args_token_of_interest_idx, tokenizer):
     # Get index in tokenizer vocabulary for token of interest
     # Some tokenizers encode/decode space along with token, so include index of whitespace + token_of_interest
     tokens_of_interest = set(
@@ -187,7 +187,8 @@ def get_vocab_idx_of_target_token(token_of_interest, token_of_interest_idx, toke
             # TODO: consider adding pluralizer from `inflect`
         ]
     )
-    token_of_interest_idx = token_of_interest_idx
+    # if index not already specified in args
+    token_of_interest_idx = args_token_of_interest_idx
     if token_of_interest_idx is None:
         token_of_interest_idx = torch.tensor(
             [
@@ -297,9 +298,9 @@ def shift_hidden_states(
     return hook
 
 def get_first_pos_of_token_of_interest(
-    tokens: torch.Tensor, # internal model state - `output` from forward hook at selected module 
+    tokens: torch.Tensor, # hidden state saved by forward hook at selected module. under test_item.hidden_states.get("module_name")[0]
     pred_tokens: torch.Tensor, # saved to `model_output` key of input item
-    target_token_vocab_idx: Union[int, torch.Tensor] = None, # index of the target token in the model vocabulary
+    target_token_vocab_idx: Union[int, torch.Tensor] = None, # index of the target token in the model vocabulary. from get_vocab_idx_of_target_token
 ) -> torch.LongTensor:
     # If the token_of_interest splits into different ids, we consider the first one (while skipping eos/bos tokens)
     if not isinstance(target_token_vocab_idx, torch.Tensor):
@@ -328,7 +329,7 @@ def get_first_pos_of_token_of_interest(
 # extract_token_of_interest_states(
 #     tokens=v, # test_item.hidden_states.get("language_model.model.layers.31")[0]
 #     pred_tokens=kwargs["model_output"], # test_item.model_output
-#     token_of_interest_idx=kwargs.get("token_of_interest_idx", None), # from get_vocab_idx()
+#     token_of_interest_idx=kwargs.get("token_of_interest_idx", None),  # from get_vocab_idx_of_target_token
 #     token_of_interest_start_token=-kwargs["model_generated_output"].shape[1] # model generated output is caption tokens only. offset same # tokens from end of all output tokens = start pos of caption tokens.
 # )
 
@@ -428,7 +429,7 @@ def extract_states_before_special_tokens(
     )
     return v_selected, no_token_found_mask
 
-# call signature for save_hidden_states_for_token_of_interest
+# partial() call signature for save_hidden_states_for_token_of_interest
 # (
 #     get_hidden_states,
 #     extract_token_of_interest=True,
@@ -468,7 +469,7 @@ def get_hidden_states(
             v, token_of_interest_mask = extract_token_of_interest_states(
                 tokens=v,
                 pred_tokens=kwargs["model_output"],
-                token_of_interest_idx=kwargs.get("token_of_interest_idx", None),
+                token_of_interest_idx=kwargs.get("token_of_interest_idx", None), # from get_vocab_idx_of_target_token
                 token_of_interest_start_token=token_of_interest_start_token,
             )
             output["token_of_interest_mask"] = token_of_interest_mask
