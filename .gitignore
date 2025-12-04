@@ -21,3 +21,4 @@ logs.log
 *.egg-info/
 out/
 *scratch.py
+data/coco/*
