@@ -6,10 +6,14 @@ import {
   Divider,
   ThemeProvider,
   Typography,
-  createTheme
+  createTheme,
+  CircularProgress
 } from '@mui/material';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
+import ConceptCard from './components/ConceptCard';
+import ConceptChart from './components/ConceptChart';
+import { mockExplanationData } from './mockData'; // Import mock data
 
 // Create a dark/clean theme or keep default. 
 // Using default here but removing body margins via CssBaseline.
@@ -22,6 +26,8 @@ function App() {
   const [caption, setCaption] = useState(null);
   const [selectedToken, setSelectedToken] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [explanationData, setExplanationData] = useState(null);
+  const [isExplaining, setIsExplaining] = useState(false);
 
   const consoleEndRef = useRef(null);
 
@@ -52,8 +58,22 @@ function App() {
     }
   }, [logs]);
 
-  // Image drag and drop handler
-  const onDrop = useCallback((acceptedFiles) => {
+  // Handle Token Click (using mock data)
+  const handleTokenClick = (token) => {
+      setSelectedToken(token);
+      setIsExplaining(true);
+      setExplanationData(null);
+      
+      // Simulate API call with a delay
+      setTimeout(() => {
+          setExplanationData(mockExplanationData);
+          addLog("Backend: Mock explanation received.");
+          setIsExplaining(false);
+      }, 500); // Simulate network delay
+  };
+
+  // Image drag and drop handler (using mock data)
+  const onDrop = useCallback(async (acceptedFiles) => {
     const file = acceptedFiles[0];
     if (!file) return;
 
@@ -65,6 +85,7 @@ function App() {
     setLogs([]);
     setCaption(null);
     setSelectedToken(null);
+    setExplanationData(null);
     setIsProcessing(true);
     addLog(`System: File loaded - ${file.name}`);
 
@@ -77,8 +98,8 @@ function App() {
     setTimeout(()=> {
       addLog("Backend: Success. Caption generated.");
       setCaption("a large brown dog running through green grass");
-      setIsProcessing(false);
-    }, 4500);
+        setIsProcessing(false);
+    }, 1000); // Simulate network delay
 
   }, []);
 
@@ -183,7 +204,9 @@ function App() {
                flexWrap: 'wrap',
                gap: 1
              }}>
-                {!caption ? (
+                {isProcessing ? (
+                    <CircularProgress size={24} />
+                ) : !caption ? (
                   <Typography variant="body2" color="text.disabled" fontStyle="italic">
                     Upload image for captioning to begin...
                   </Typography>
@@ -191,7 +214,7 @@ function App() {
                   caption.split(' ').map((word, i) => (
                     <Typography
                       key={i}
-                      onClick={() => setSelectedToken(word)}
+                      onClick={() => handleTokenClick(word)}
                       sx={{
                         cursor: 'pointer',
                         px: 0.8,
@@ -251,23 +274,82 @@ function App() {
           </Box>
         </Box>
 
-        {/* Concept visualizer */}
+        {/* Concept visualizer (Right Panel) */}
         <Box sx={{ 
           width: '50%', 
           height: '100%',
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          flexDirection: 'column',
           bgcolor: '#fafafa',
           borderLeft: '1px solid #e0e0e0',
           position: 'relative'
         }}>
-          <Typography variant="h5" color="text.disabled" fontWeight="bold">
-            Concept Visualizations Area
-          </Typography>
-          <Box>
-            {/* TODO: d3 visualizations here */}
-          </Box>
+           {!selectedToken ? (
+             <Box display="flex" flex={1} alignItems="center" justifyContent="center" flexDirection="column" color="text.secondary">
+                <Typography variant="h6">Select a token to analyze</Typography>
+                <Typography variant="body2">Click on a word in the caption on the left</Typography>
+             </Box>
+           ) : (
+             <Box display="flex" flexDirection="column" height="100%">
+               {/* Header for Right Panel */}
+               <Box p={2} borderBottom="1px solid #e0e0e0" bgcolor="white">
+                 <Typography variant="h6">
+                   Explanation for: <Box component="span" color="primary.main" fontWeight="bold">"{selectedToken}"</Box>
+                 </Typography>
+               </Box>
+
+               {/* Comparison Columns */}
+               {isExplaining || !explanationData ? (
+                   <Box flex={1} display="flex" alignItems="center" justifyContent="center">
+                       <CircularProgress />
+                   </Box>
+               ) : (
+               <Box display="flex" flex={1} overflow="hidden">
+                 {/* Global Activations */}
+                 <Box flex={1} display="flex" flexDirection="column" borderRight="1px solid #e0e0e0">
+                    <Box p={2} bgcolor="#e3f2fd" borderBottom="1px solid #bbdefb">
+                      <Typography variant="subtitle1" fontWeight="bold" color="#1565c0">
+                        Global Activation (CoX-LMM)
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        What is present in the internal state?
+                      </Typography>
+                    </Box>
+                    {/* Chart for Global */}
+                    <Box px={2} pt={2} borderBottom="1px solid #eee" bgcolor="#f1f8ff">
+                        <ConceptChart data={explanationData.global_activations} color="#2196f3" />
+                    </Box>
+                    <Box flex={1} p={2} sx={{ overflowY: 'auto' }}>
+                      {explanationData.global_activations.map((concept, idx) => (
+                        <ConceptCard key={idx} concept={concept} type="global" />
+                      ))}
+                    </Box>
+                 </Box>
+
+                 {/* Local Importance */}
+                 <Box flex={1} display="flex" flexDirection="column">
+                    <Box p={2} bgcolor="#e8f5e9" borderBottom="1px solid #c8e6c9">
+                      <Typography variant="subtitle1" fontWeight="bold" color="#2e7d32">
+                        Local Importance (Gradient)
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        What actually caused this prediction?
+                      </Typography>
+                    </Box>
+                    {/* Chart for Local */}
+                    <Box px={2} pt={2} borderBottom="1px solid #eee" bgcolor="#f1f8ff">
+                        <ConceptChart data={explanationData.local_importances} color="#4caf50" />
+                    </Box>
+                    <Box flex={1} p={2} sx={{ overflowY: 'auto' }}>
+                      {explanationData.local_importances.map((concept, idx) => (
+                        <ConceptCard key={idx} concept={concept} type="local" />
+                      ))}
+                    </Box>
+                 </Box>
+               </Box>
+               )}
+             </Box>
+           )}
         </Box>
 
       </Box>
