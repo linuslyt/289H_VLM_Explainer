@@ -201,78 +201,79 @@ def get_hidden_states_of_relevant_samples(
 # UNTESTED
 def get_concept_grad_at_target_token_step(
     model_class,
-    test_input, # preprocessed_test_input
-    token_index, # token_index is the index of the token in the generated tokens (i.e. not including prompt tokens).
-                 # this SHOULD be the same index returned by get_first_pos_of_token_of_interest().
+    test_item, # saved from single_inference()
+    token_index, # token_index is the index of the token in the generated tokens (including prompt tokens).
+                 # this is the index returned by get_first_pos_of_token_of_interest().
     h_recon_torch, # hidden state of test item for target token, projected onto global concept dictionary for target token
     target_id, # vocabulary index of target token. should be from get_vocab_idx_of_target_token()
 ):
     model = model_class.get_model()
     layer_name = "language_model.model.layers.31"
     target_layer = get_module_by_path(model, layer_name)
+    
+    # Load full token sequence predicted previously. 
+    full_sequence = test_item["model_output"][0] # shape: [1, seq_len]
+    # print(f"full_sequence.shape={full_sequence.shape}")
 
-    current_step = 0
+    # Context up to, i.e. excluding, target token
+    # If "motorcycle" is at index K, we input tokens [0 ... K-1]
+    # The model will then try to predict token K ("motorcycle")
+    input_up_to_target_token = full_sequence[:, :token_index]
 
+    # Call model() for last forward pass to generate target token.
+    # Patch hidden state with differentiable state reconstructed from projection onto concept dictionary.
     def replace_token_hidden_state(module, input, output):
-        # hooks index from computed tokens onwards
-        nonlocal current_step
+        # output is a tuple: (hidden_states, self_attn, present_kv)
+        hidden_states = output[0] # tensor [batch, seq, dim]
+        rest_output = output[1:]
 
-        # only patch during the step where the target token is generated
-        if current_step != token_index:
-            out = output
-        else:
-            # output is a tuple: (hidden_states, self_attn, present_kv)
-            hidden_states = output[0]        # tensor [B, seq, dim]
-            rest_output = output[1:]               # everything else
+        # clone so autograd works as expected
+        new_hidden = hidden_states.clone()
 
-            # clone so autograd works as expected
-            new_hidden = hidden_states.clone()
+        # Patch the hidden state generated in the last timestep before the token of interest
+        # If the target word translates to multiple subtokens, patch with the hidden state before the target's first subtoken
+        new_hidden[0, -1, :] = h_recon_torch
 
-            # patch hidden state from target token position onwards
-            new_hidden[0, token_index, :] = h_recon_torch
+        # return same structure transformer expects
+        return (new_hidden, *rest_output)
 
-            # return same structure transformer expects
-            out = (new_hidden, *rest_output)
-        return out
 
-    hook = target_layer.register_forward_hook(replace_token_hidden_state)
+    hook_handle = target_layer.register_forward_hook(replace_token_hidden_state)
 
-    # print(test_input)
-
-    # TODO: gradients not working. need to split into generate for p-1 steps, then single pass for last step w/ gradients.
     with torch.enable_grad():
-        gen_out = model.generate(
-            **test_input,
-            max_new_tokens=50, # TODO: args.max_new_tokens
-            do_sample=False,
-            # To get output logits for every token, and at every step
-            output_scores=True,
-            return_dict_in_generate=True,
-            # To get gradients
-            use_cache=False,     # needed for gradients
+        outputs = model(
+            input_ids=input_up_to_target_token,
+            output_hidden_states=False,
+            use_cache=False,
         )
+    
+    # Extract logits for target token
+    logits = outputs.logits[:, -1, :]  # shape [1, vocab]
 
-    print("len(scores):", len(gen_out.scores))
-    print("token_index:", token_index)
-
-    # extract logit for the target token at the step where it was generated
-    target_logit = gen_out.scores[token_index][0, target_id]
-
-    # compute gradient of logit wrt hidden state
-    model.zero_grad()
+    # If target_id is a tensor/list, i.e. the target word translates to multiple subtokens, use the position of the first one
+    if hasattr(target_id, '__len__') and len(target_id) > 1:
+        scalar_target_id = target_id[0]
+    else:
+        scalar_target_id = target_id
+        
+    target_logit = logits[0, scalar_target_id]
 
     print("target_logit:", target_logit, "requires_grad:", getattr(target_logit, "requires_grad", None))
-    print("gen_out.scores[gen_idx].requires_grad:", gen_out.scores[token_index].requires_grad)
     print("h_recon_torch.requires_grad:", h_recon_torch.requires_grad)
 
-    target_logit.backward()
+    # Clean up previous gradients
+    model.zero_grad()
+    if h_recon_torch.grad is not None:
+        h_recon_torch.grad.zero_()
 
-    grad_h = h_recon_torch.grad.detach().cpu()
+    # Backprop to calculate gradient for target token logit
+    target_logit.backward()
+    grad = h_recon_torch.grad
 
     # TODO: compute gradient of logit wrt concept vectors (mult by Z?)
     # TODO: compute gradient * concept activation --> concept importance
-    hook.remove()
-    return grad_h
+    hook_handle.remove()
+    return grad
 
 if __name__ == "__main__":
     logger = setup_logger(LOG_FILE)
@@ -350,6 +351,14 @@ if __name__ == "__main__":
 
     concept_dict_filename = f"llava_concept_dict_{DATASET_NAME}_{DICTIONARY_LEARNING_DATA_SPLIT}_{TARGET_TOKEN}"
     concept_dict_final_path = os.path.join(OUT_DIR, "concept_dicts", f"{DICT_ANALYSIS_NAME}_{concept_dict_filename}.pth")
+    dict_learning_device = torch.device("cpu")
+    dict_learning_model = get_model_class(
+        model_name_or_path=MODEL_NAME,
+        processor_name=MODEL_NAME,
+        device=dict_learning_device,
+        logger=logger,
+        args=model_setup_args,
+    )
     if os.path.exists(concept_dict_final_path) and not FORCE_RECOMPUTE:
         logger.info(f"Loaded concept dict from {concept_dict_final_path}")
         global_concept_dict_for_token = torch.load(concept_dict_final_path)
@@ -373,14 +382,6 @@ if __name__ == "__main__":
             "decomposition_method": "snmf",
         })
         log_args(concept_dict_mining_args, logger)
-        dict_learning_device = torch.device("cpu")
-        dict_learning_model = get_model_class(
-            model_name_or_path=MODEL_NAME,
-            processor_name=MODEL_NAME,
-            device=dict_learning_device,
-            logger=logger,
-            args=model_setup_args,
-        )
         global_concept_dict_for_token = analyse_features(
             analysis_name=concept_dict_mining_args.analysis_name,
             logger=logger,
@@ -432,7 +433,10 @@ if __name__ == "__main__":
     v_X = torch.tensor(projections)
     # TypeError: unsupported operand type(s) for @: 'numpy.ndarray' and 'Tensor'
     h_recon = v_X @ global_concept_dict_for_token["concepts"]
-    h_recon_torch = h_recon.clone().detach().requires_grad_(True)
+    print(f"h_recon_type:{type(h_recon)}, test_input_type:{type(preprocessed_test_input[0])}")
+    h_recon_torch = h_recon.to(dtype=llava_model.get_model().dtype, device=llava_model.get_model().device).clone().detach().requires_grad_(True)
+    torch.save(h_recon_torch, "motorcycle_recon.pth")
+    # h_recon_torch = h_recon.clone().detach().requires_grad_(True)
     print(f"h_recon_torch.shape={h_recon_torch.shape}")
 
 
@@ -441,12 +445,19 @@ if __name__ == "__main__":
     # get offset from -test_item.get("model_output")[0]
     grads = get_concept_grad_at_target_token_step(
         model_class=llava_model,
-        test_input=preprocessed_test_input[0],
-        token_index=target_token_first_idx_in_caption_output,
+        test_item=test_item,
+        token_index=target_token_first_idx_in_entire_output,
         h_recon_torch=h_recon_torch,
         target_id=target_token_vocab_idx,
     )
     print(grads)
+    print(grads.shape)
+    # If these are zero gradient chain is broken
+    print(f"Non-zero elements: {torch.count_nonzero(grads).item()}")
+    print(f"Max gradient: {grads.abs().max().item()}")
+    print(f"Non-zero elements: {torch.count_nonzero(grads).item()}")
+    
+    torch.save(grads, "motorcycle_grad.pth")
     # multiple by v_X to get activations
 
 # TODO: return groundings with 1) indexes sorted by activations and 2) indexes sorted by importances
