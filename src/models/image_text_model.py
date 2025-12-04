@@ -59,7 +59,6 @@ class ImageTextModel:
             f"preprocess_text() is not defined for the model: {self.model_name_or_path}"
         )
 
-    # TODO: batch
     def preprocess_images(
         self,
         image_file: Union[str, List[str]],

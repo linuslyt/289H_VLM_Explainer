@@ -29,9 +29,8 @@ def get_dataset_loader(
         indices (list): The indices of the subset (if applicable) or an empty list.
     """
 
-    # TODO: update batch size
     batch_size = getattr(args, "batch_size", 1)
-    print(f"DataLoader batch size = {batch_size}")
+    # print(f"DataLoader batch size = {batch_size}")
     if dataset_name == "coco":
         dataset_cls = COCODataset
     elif dataset_name == "vqav2":
@@ -106,7 +105,11 @@ def get_dataset_loader(
             pin_memory=True,
         )
     if logger is not None:
-        logger.info(f"Reading dataset: {dataset_name} of size: {len(loader)}")
+        if batch_size == 1:
+            logger.info(f"Reading dataset: {dataset_name}. Loaded {len(loader)} rows.")
+        elif batch_size > 1:
+            logger.info(f"Reading dataset: {dataset_name}. Loaded {batch_size} batches of {len(loader)} rows each.")
+
     assert len(loader) > 0, f"loader is empty"
 
     return loader

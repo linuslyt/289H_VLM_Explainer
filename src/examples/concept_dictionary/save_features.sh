@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Finds samples in dataset where target token exists in ground truth caption,
+# runs model inference on them, then extracts hidden states at the target module during inference
+
 # Path to your xl-vlms repository
 cd ~/xai/xl-vlms
 

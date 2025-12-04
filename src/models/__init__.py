@@ -66,3 +66,10 @@ def get_model_class(
     model_class.model_.to(device)
 
     return model_class
+
+def get_module_by_path(model, module_name):
+    parts = module_name.split(".")
+    m = model
+    for p in parts:
+        m = getattr(m, p)
+    return m

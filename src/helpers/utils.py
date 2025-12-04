@@ -176,6 +176,31 @@ def compute_time_left(start_time, iteration: int, num_iterations: int):
     time_left = avg_time_per_iter * remaining_iters  # Estimated time left
     return time_left / 60
 
+def get_vocab_idx_of_target_token(token_of_interest, args_token_of_interest_idx, tokenizer):
+    # Get index in tokenizer vocabulary for token of interest
+    # Some tokenizers encode/decode space along with token, so include index of whitespace + token_of_interest
+    tokens_of_interest = set(
+        [
+            token_of_interest,
+            token_of_interest.capitalize(),
+            token_of_interest.lower(),
+            # TODO: consider adding pluralizer from `inflect`
+        ]
+    )
+    # if index not already specified in args
+    token_of_interest_idx = args_token_of_interest_idx
+    if token_of_interest_idx is None:
+        token_of_interest_idx = torch.tensor(
+            [
+                tokenizer.encode(tok, add_special_tokens=False)[0]
+                for tok in tokens_of_interest
+            ]
+        )
+        check_token = tokenizer.encode(" " + token_of_interest, add_special_tokens=False)[0]
+        if token_of_interest in tokenizer.decode([check_token]): # Check if this check_token is only encoding whitespace
+            token_of_interest_idx = torch.tensor(list(token_of_interest_idx) + [check_token])
+    
+    return token_of_interest_idx
 
 def get_start_idx_generated_tokens(tokens: List[torch.Tensor]) -> int:
     if isinstance(tokens, list) and len(tokens) > 1:
@@ -272,39 +297,19 @@ def shift_hidden_states(
 
     return hook
 
-
-def extract_token_of_interest_states(
-    tokens: torch.Tensor,
-    pred_tokens: torch.Tensor,
-    token_of_interest_idx: Union[int, torch.Tensor] = None,
-    token_of_interest_start_token: int = 0,
-) -> Tuple[torch.Tensor]:
-
-    if token_of_interest_start_token != 0:
-        # e.g. consider only te answers
-        tokens = tokens[:, token_of_interest_start_token:]
-        pred_tokens = pred_tokens[:, token_of_interest_start_token:]
-
-    # Concider only text, no preds tokens for image tokens
-    if pred_tokens.shape[1] > tokens.shape[1]:
-        pred_tokens = pred_tokens[
-            :, -tokens.shape[1] :
-        ]  # e.g. in case of language_model.lm_head only the hidden states for generated tokens are saved
-    elif pred_tokens.shape[1] < tokens.shape[1]:
-        tokens = tokens[:, -pred_tokens.shape[1] :]
-
-    assert (
-        token_of_interest_idx is not None
-    ), f"Please provide the token_of_interest_idx, got {token_of_interest_idx}"
-
+def get_first_pos_of_token_of_interest(
+    tokens: torch.Tensor, # hidden state saved by forward hook at selected module. under test_item.hidden_states.get("module_name")[0]
+    pred_tokens: torch.Tensor, # saved to `model_output` key of input item
+    target_token_vocab_idx: Union[int, torch.Tensor] = None, # index of the target token in the model vocabulary. from get_vocab_idx_of_target_token
+) -> torch.LongTensor: # index of the target token in the entire model output, INCLUDING caption tokens.
     # If the token_of_interest splits into different ids, we consider the first one (while skipping eos/bos tokens)
-    if not isinstance(token_of_interest_idx, torch.Tensor):
-        token_of_interest_idx = torch.tensor([token_of_interest_idx])
-    token_of_interest_idx = token_of_interest_idx.to(pred_tokens.device)
+    if not isinstance(target_token_vocab_idx, torch.Tensor):
+        target_token_vocab_idx = torch.tensor([target_token_vocab_idx])
+    target_token_vocab_idx = target_token_vocab_idx.to(pred_tokens.device)
 
     # Step 1: Find where the tokens of interest exist in the batch (B, L)
     token_of_interest_batch_presence = torch.isin(
-        pred_tokens, token_of_interest_idx
+        pred_tokens, target_token_vocab_idx
     )  # (B, L)
     # Step 2: Get the first occurrence index for each sequence
     token_of_interest_batch_first_pos = torch.argmax(
@@ -316,6 +321,43 @@ def extract_token_of_interest_states(
 
     # Set the position to -1 if no token of interest is found
     token_of_interest_batch_first_pos[no_token_found_mask] = -1
+    
+
+    # tensor of integers. ith integer indicates the index in the ith sequence at which the target token first appears.
+    return token_of_interest_batch_first_pos, no_token_found_mask
+
+# extract_token_of_interest_states(
+#     tokens=v, # test_item.hidden_states.get("language_model.model.layers.31")[0]
+#     pred_tokens=kwargs["model_output"], # test_item.model_output
+#     token_of_interest_idx=kwargs.get("token_of_interest_idx", None),  # from get_vocab_idx_of_target_token
+#     token_of_interest_start_token=-kwargs["model_generated_output"].shape[1] # model generated output is caption tokens only. offset same # tokens from end of all output tokens = start pos of caption tokens.
+# )
+
+def extract_token_of_interest_states(
+    tokens: torch.Tensor,
+    pred_tokens: torch.Tensor,
+    token_of_interest_idx: Union[int, torch.Tensor] = None,
+    token_of_interest_start_token: int = 0,
+) -> Tuple[torch.Tensor]:
+
+    if token_of_interest_start_token != 0:
+        # e.g. consider only the answers
+        tokens = tokens[:, token_of_interest_start_token:]
+        pred_tokens = pred_tokens[:, token_of_interest_start_token:]
+
+    # Consider only text, no preds tokens for image tokens
+    if pred_tokens.shape[1] > tokens.shape[1]:
+        pred_tokens = pred_tokens[
+            :, -tokens.shape[1] :
+        ]  # e.g. in case of language_model.lm_head only the hidden states for generated tokens are saved
+    elif pred_tokens.shape[1] < tokens.shape[1]:
+        tokens = tokens[:, -pred_tokens.shape[1] :]
+
+    assert (
+        token_of_interest_idx is not None
+    ), f"Please provide the token_of_interest_idx, got {token_of_interest_idx}"
+
+    token_of_interest_batch_first_pos, no_token_found_mask = get_first_pos_of_token_of_interest(tokens, pred_tokens, target_token_vocab_idx=token_of_interest_idx)
 
     # Step 4: Now handle indexing into `v` based on the first position
     # Extract v at the first position for each batch (B,)
@@ -387,7 +429,15 @@ def extract_states_before_special_tokens(
     )
     return v_selected, no_token_found_mask
 
-# TODO: proper fix: modify for batching
+# partial() call signature for save_hidden_states_for_token_of_interest
+# (
+#     get_hidden_states,
+#     extract_token_of_interest=True,
+#     token_of_interest_idx=token_of_interest_idx, # index in vocabulary. from get_vocab_idx_of_target_token()
+#     token_of_interest_start_token=args.token_of_interest_start_token, # if not in test_item, None --> 0
+#     save_only_generated_tokens=args.save_only_generated_tokens, # True
+#     **test_item
+# )
 def get_hidden_states(
     token_idx: int = None,
     token_start_end_idx: List[List[int]] = None,
@@ -419,7 +469,7 @@ def get_hidden_states(
             v, token_of_interest_mask = extract_token_of_interest_states(
                 tokens=v,
                 pred_tokens=kwargs["model_output"],
-                token_of_interest_idx=kwargs.get("token_of_interest_idx", None),
+                token_of_interest_idx=kwargs.get("token_of_interest_idx", None), # from get_vocab_idx_of_target_token
                 token_of_interest_start_token=token_of_interest_start_token,
             )
             output["token_of_interest_mask"] = token_of_interest_mask
@@ -447,7 +497,6 @@ def get_hidden_states(
     output["hidden_states"] = hidden_states
     return output
 
-# TODO: proper fix: modify for batching
 def save_hidden_states_to_file(
     data: Dict[str, Any],
     data_keys: List[str] = ["hidden_states"],
@@ -464,6 +513,7 @@ def save_hidden_states_to_file(
             ), f"{data_key} not found in data, there is only: {data.keys()}"
 
             saved_data[data_key] = data[data_key]  # List[Any]
+    os.makedirs(os.path.join(args.save_dir, "features"), exist_ok=True)
     file_name = os.path.join(
         args.save_dir, "features", f"{hook_name}_{args.save_filename}.pth"
     )
@@ -521,27 +571,7 @@ def register_hooks(
         # Save the hidden states of tokens between start and end index
         token_of_interest = args.token_of_interest
 
-        # Get index in tokenizer vocabulary for token of interest
-        # Some tokenizers encode/decode space along with token, so include index of whitespace + token_of_interest
-        tokens_of_interest = set(
-            [
-                token_of_interest,
-                token_of_interest.capitalize(),
-                token_of_interest.lower(),
-            ]
-        )
-        token_of_interest_idx = args.token_of_interest_idx
-        if token_of_interest_idx is None:
-            token_of_interest_idx = torch.tensor(
-                [
-                    tokenizer.encode(tok, add_special_tokens=False)[0]
-                    for tok in tokens_of_interest
-                ]
-            )
-            check_token = tokenizer.encode(" " + token_of_interest, add_special_tokens=False)[0]
-            if token_of_interest in tokenizer.decode([check_token]): # Check if this check_token is only encoding whitespace
-                token_of_interest_idx = torch.tensor(list(token_of_interest_idx) + [check_token])
-            
+        token_of_interest_idx = get_vocab_idx_of_target_token(token_of_interest, args.token_of_interest_idx, tokenizer)
 
         hook_function = save_hidden_states
         hook_return_function = partial(
@@ -615,6 +645,7 @@ def register_hooks(
         warnings.warn(f"{hook_name} is not supported. No hooks attached to model.")
     if hook_function is not None:
         hooked_modules = []
+        # Register forward hooks for module
         for name, module in model.named_modules():
             if fmatch(
                 name, modules_to_hook, exact_match=args.exact_match_modules_to_hook
@@ -705,3 +736,23 @@ def setup_hooks(
         hook_postprocessing_functions.append(hook_postprocessing_function)
 
     return hook_return_functions, hook_postprocessing_functions
+
+def get_most_free_gpu():
+    if not torch.cuda.is_available():
+        print("CUDA is not available. No GPU devices found.")
+        return -1
+
+    num_gpus = torch.cuda.device_count()
+    if num_gpus == 0:
+        print("CUDA is not available. No GPU devices found.")
+        return -1
+
+    max_free_memory = -1
+    for i in range(num_gpus):
+        # mem_get_info returns (free_memory_in_bytes, total_memory_in_bytes)
+        free_memory, total_memory = torch.cuda.memory.mem_get_info(i)
+        if free_memory > max_free_memory:
+            max_free_memory = free_memory
+            freest_gpu_index = i
+            
+    return freest_gpu_index

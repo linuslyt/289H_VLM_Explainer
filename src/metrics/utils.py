@@ -12,6 +12,7 @@ __all__ = ["get_words_frequency", "get_number_predictions_with_token_of_interest
 
 # multimodal grounding utils
 
+# If not found, make sure you're running from repo root
 GIST_FILE_PATH = "src/assets/gist_stopwords.txt"
 
 

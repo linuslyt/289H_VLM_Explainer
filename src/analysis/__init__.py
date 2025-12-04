@@ -94,7 +94,7 @@ def analyse_features(
     device: torch.device = torch.device("cpu"),
     args: argparse.Namespace = None,
     **kwargs: Any,
-) -> None:
+) -> Dict[str, Any]:
 
     if args.features_path is not None:
         features, metadata = load_features(
@@ -191,3 +191,5 @@ def analyse_features(
         torch.save(results_dict, file_name)
         if logger is not None:
             logger.info(f"Saving analysis results to: {file_name}")
+
+    return results_dict

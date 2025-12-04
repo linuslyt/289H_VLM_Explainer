@@ -20,6 +20,7 @@ class LLaVA(ImageTextModel):
             low_cpu_mem_usage=True,
             local_files_only=self.local_files_only,
         )
+        self.model_.eval()
 
     def get_language_model(
         self,
@@ -73,7 +74,6 @@ class LLaVA(ImageTextModel):
 
         return conversation
 
-    # TODO: batch
     def preprocess_text(
         self,
         instruction: Union[str, List[str]] = "What are these?",
