@@ -10,6 +10,9 @@ from PIL import Image, UnidentifiedImageError
 import torch
 from typing import Union
 
+from acronim_server import new_event, get_uploaded_img_path
+from acronim_server.captioning import caption_uploaded_img
+
 from helpers.utils import (get_most_free_gpu)
 
 app = FastAPI()
@@ -31,8 +34,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = "./uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 @app.post("/upload/", status_code=status.HTTP_201_CREATED)
 async def save_image(file: UploadFile = File(...)):
     print("Processing uploaded image...")
@@ -49,7 +50,7 @@ async def save_image(file: UploadFile = File(...)):
 
         # Save as JPG. Resizing etc. will be handled by LLaVA processor
         new_filename = f"{file.filename.split('.')[0]}.jpg"
-        save_path = os.path.join(UPLOAD_DIR, new_filename)
+        save_path = get_uploaded_img_path(new_filename)
         image.save(save_path, "JPEG", exist_ok=True)
 
         return {
@@ -61,22 +62,10 @@ async def save_image(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# TODO: typing
-def new_event(event_type: str, data: Union[str, dict]):
-    # https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events#event_stream_format
-    return f"event: {event_type}\ndata: {data if type(data) == str else json.dumps(data)}\n\n"
-
-async def captioning_pipeline():
-    await asyncio.sleep(0.5)
-    yield new_event(event_type="log", data="Generating image caption...")
-
-    await asyncio.sleep(0.5)
-    caption = "placeholder"
-    yield new_event(event_type="scores", data=caption) # On frontend, retrieve with event.data
-
 @app.get("/caption-image")
-async def caption_image():
-    return StreamingResponse(captioning_pipeline(), media_type="text/event-stream")
+async def caption_image(img_path: str):
+    print(f"captioning image for {img_path}")
+    return StreamingResponse(caption_uploaded_img(img_path), media_type="text/event-stream")
 
 async def importance_estimation_piipeline():
     await asyncio.sleep(0.5)
