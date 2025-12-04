@@ -35,6 +35,7 @@ INFERENCE_DATA_SPLIT="test"
 INFERENCE_SUBSET_SIZE=5000
 DICTIONARY_LEARNING_DATA_SPLIT="train"
 DICTIONARY_LEARNING_SUBSET_SIZE=5000 # full set is 82783
+NUM_CONCEPTS=20
 TARGET_IMAGE=""
 TARGET_TOKEN="motorcycle" # NOTE: some tokens will cause dictionary learning to fail, e.g. "dogs" for some reason. not entirely sure why.
 SEED=28
@@ -206,6 +207,7 @@ def get_concept_grad_at_target_token_step(
                  # this is the index returned by get_first_pos_of_token_of_interest().
     h_recon_torch, # hidden state of test item for target token, projected onto global concept dictionary for target token
     target_id, # vocabulary index of target token. should be from get_vocab_idx_of_target_token()
+    concept_matrix, # shape: [N_concepts, Hidden_Dim] (e.g., [20, 4096])
 ):
     model = model_class.get_model()
     layer_name = "language_model.model.layers.31"
@@ -268,12 +270,19 @@ def get_concept_grad_at_target_token_step(
 
     # Backprop to calculate gradient for target token logit
     target_logit.backward()
-    grad = h_recon_torch.grad
+    grad_wrt_input = h_recon_torch.grad
 
-    # TODO: compute gradient of logit wrt concept vectors (mult by Z?)
-    # TODO: compute gradient * concept activation --> concept importance
+    # Compute Gradient w.r.t Concept Activations
+    concept_matrix = concept_matrix.to(device=model.device, dtype=grad_wrt_input.dtype) # ensure it's on the same device/dtype=fp16
+    grad_wrt_concepts = grad_wrt_input @ concept_matrix.T  # TODO: check if need transpose
+    # grads shape: [1, 4096]
+    # concept_matrix.T shape: [4096, 20]
+    # result shape: [1, 20]
+    print(f"Concept Gradients shape: {grad_wrt_concepts.shape}")
+    print(grad_wrt_concepts)
+
     hook_handle.remove()
-    return grad
+    return grad_wrt_concepts
 
 if __name__ == "__main__":
     logger = setup_logger(LOG_FILE)
@@ -378,7 +387,7 @@ if __name__ == "__main__":
             "analysis_name": DICT_ANALYSIS_NAME, # generates concepts for the selected token across relevant samples in whole dataset, 
                                                 # then grounds each concept textually and visually
             "module_to_decompose": TARGET_FEATURE_MODULES[0][0],
-            "num_concepts": [20], # why the hell is nargs="+"??
+            "num_concepts": [NUM_CONCEPTS], # why the hell is nargs="+"??
             "decomposition_method": "snmf",
         })
         log_args(concept_dict_mining_args, logger)
@@ -443,28 +452,30 @@ if __name__ == "__main__":
     # target_token_first_idx_in_generated_output: first index of token in generated output, calculated from first generated token (includes prompt)
     # need to modify token_index by start of caption token offset
     # get offset from -test_item.get("model_output")[0]
-    grads = get_concept_grad_at_target_token_step(
+    concept_grads = get_concept_grad_at_target_token_step(
         model_class=llava_model,
         test_item=test_item,
         token_index=target_token_first_idx_in_entire_output,
         h_recon_torch=h_recon_torch,
         target_id=target_token_vocab_idx,
+        concept_matrix=global_concept_dict_for_token["concepts"]
     )
-    print(grads)
-    print(grads.shape)
+    print(concept_grads)
+    print(concept_grads.shape)
     # If these are zero gradient chain is broken
-    print(f"Non-zero elements: {torch.count_nonzero(grads).item()}")
-    print(f"Max gradient: {grads.abs().max().item()}")
-    print(f"Non-zero elements: {torch.count_nonzero(grads).item()}")
+    print(f"Non-zero elements: {torch.count_nonzero(concept_grads).item()}")
+    print(f"Max gradient: {concept_grads.abs().max().item()}")
+    print(f"Non-zero elements: {torch.count_nonzero(concept_grads).item()}")
     
-    torch.save(grads, "motorcycle_grad.pth")
-    # multiple by v_X to get activations
+    torch.save(concept_grads, "motorcycle_grad.pth")
+    concept_activations = v_X.to(device=llava_model.get_model().device, dtype=llava_model.get_model().dtype) # v_X shape: [1, N_concepts]
+    concept_importance_scores = concept_activations * concept_grads
+    top_scores, top_indices = torch.topk(concept_importance_scores, k=NUM_CONCEPTS) # if we match k=#concepts we should get ranking of all concepts
 
-# TODO: return groundings with 1) indexes sorted by activations and 2) indexes sorted by importances
-# rank_and_ground_concepts()
-    # see concept_grounding_visualization.ipynb 
-    
+    # TODO: split into rankings for both positive and negative contributors
+    for rank, (score, concept_idx) in enumerate(zip(top_scores[0], top_indices[0])):
+        print(f"#{rank+1}: Concept {concept_idx} (Importance {score.item():.4f}; Activation: {concept_activations[0, concept_idx]:.2f}; Gradient: {concept_grads[0, concept_idx]:.4f})")
 
-# TODO: cut down number of concepts
-# TODO (stretch goal): get concept dict for every word in caption
-# TODO: maybe add plural version of token(?) but it maaaay change the "concept"
+    # TODO: function that computes groundings for a given concept matrix and a concept index
+    # ground_concepts()
+        # see concept_grounding_visualization.ipynb 
