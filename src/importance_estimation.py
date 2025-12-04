@@ -34,7 +34,7 @@ ANNOTATION_FILE="karpathy/dataset_coco.json"
 INFERENCE_DATA_SPLIT="test"
 INFERENCE_SUBSET_SIZE=5000
 DICTIONARY_LEARNING_DATA_SPLIT="train"
-DICTIONARY_LEARNING_SUBSET_SIZE=5000 # full set is 82783
+DICTIONARY_LEARNING_SUBSET_SIZE=82783 # full set is 82783
 NUM_CONCEPTS=20
 TARGET_IMAGE=""
 TARGET_TOKEN="motorcycle" # NOTE: some tokens will cause dictionary learning to fail, e.g. "dogs" for some reason. not entirely sure why.
@@ -472,10 +472,9 @@ if __name__ == "__main__":
     concept_importance_scores = concept_activations * concept_grads
     top_scores, top_indices = torch.topk(concept_importance_scores, k=NUM_CONCEPTS) # if we match k=#concepts we should get ranking of all concepts
 
-    # TODO: split into rankings for both positive and negative contributors
+    # TODO: split into rankings for both positive and negative contributors.
     for rank, (score, concept_idx) in enumerate(zip(top_scores[0], top_indices[0])):
-        print(f"#{rank+1}: Concept {concept_idx} (Importance {score.item():.4f}; Activation: {concept_activations[0, concept_idx]:.2f}; Gradient: {concept_grads[0, concept_idx]:.4f})")
-
-    # TODO: function that computes groundings for a given concept matrix and a concept index
-    # ground_concepts()
-        # see concept_grounding_visualization.ipynb 
+        print(f"#{rank+1}: Concept {concept_idx}."
+              + f"\nImage groundings ={global_concept_dict_for_token['image_grounding_paths'][concept_idx][:10]}" 
+              + f"\nText groundings ={global_concept_dict_for_token['text_grounding'][concept_idx][:10]}..."
+              + f"\n(Importance {score.item():.4f}; Activation: {concept_activations[0, concept_idx]:.2f}; Gradient: {concept_grads[0, concept_idx]:.4f})")

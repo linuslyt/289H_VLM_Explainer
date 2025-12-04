@@ -124,7 +124,6 @@ def get_multimodal_grounding(
         logger.info(f"Image paths length: {len(image_paths)}")
         # Only keep image paths for samples with token_of_interest_mask True
 
-        # TODO: support batches
         token_of_interest_mask = metadata.get("token_of_interest_mask", None)
         if token_of_interest_mask is not None:
             image_paths = [

@@ -175,7 +175,6 @@ def decompose_activations(
     return components, comp_activ, model
 
 
-# TODO: use this to project
 def project_representations(
     sample: torch.Tensor, analysis_model: Callable, decomposition_type: str = "nndl"
 ) -> np.ndarray:
