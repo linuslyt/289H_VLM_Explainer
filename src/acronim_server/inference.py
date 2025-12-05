@@ -40,7 +40,8 @@ ANNOTATION_FILE="karpathy/dataset_coco.json"
 INFERENCE_DATA_SPLIT="test"
 INFERENCE_SUBSET_SIZE=5000
 DICTIONARY_LEARNING_DATA_SPLIT="train"
-DICTIONARY_LEARNING_SUBSET_SIZE=82783 # full set is 82783
+COCO_TRAIN_FULL_SIZE=82783 # full set is 82783
+DICTIONARY_LEARNING_MIN_SAMPLE_SIZE=5000
 NUM_CONCEPTS=20
 TARGET_IMAGE=""
 TARGET_TOKEN="motorcycle" # NOTE: some tokens will cause dictionary learning to fail, e.g. "dogs" for some reason. not entirely sure why.
@@ -51,10 +52,10 @@ DICT_ANALYSIS_NAME="decompose_activations_text_grounding_image_grounding"
 
 uploaded_img_hidden_state_filename = f"llava_input_inference_{DATASET_NAME}_{INFERENCE_DATA_SPLIT}_{TARGET_TOKEN}"
 
-CAPTIONING_ARGS = {
+DEFAULT_CAPTIONING_ARGS = {
     "model_name_or_path": MODEL_NAME,
     "dataset_name": DATASET_NAME,
-    "dataset_size": "-1", # should be overridden
+    "dataset_size": DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, # should be overridden
     "data_dir": DATA_DIR,
     "annotation_file": ANNOTATION_FILE,
     "split": "test", # should be overridden
@@ -76,27 +77,34 @@ CAPTIONING_ARGS = {
 
 FORCE_RECOMPUTE=False # TODO: make script argument
 
+logger = setup_logger(LOG_FILE)
+set_seed(SEED)
+device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
+
+default_model_args = get_arguments(DEFAULT_CAPTIONING_ARGS)
+llava_model_class = get_model_class(
+    model_name_or_path=MODEL_NAME,
+    processor_name=MODEL_NAME,
+    device=device,
+    logger=logger,
+    args=default_model_args, # larger arg dict not needed for model setup
+)
+
 @torch.no_grad()
 def caption_uploaded_img(
     uploaded_img_path: str
 ):
     start_time = time.perf_counter()
     # if preprocessed_input exists, load...
-    logger = setup_logger(LOG_FILE)
-    set_seed(SEED)
-    device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
-    args = get_arguments({
-        **CAPTIONING_ARGS,
-    })
-    log_args(args, logger)
+    log_args(default_model_args, logger)
     yield new_log_event(logger, f"Loading model={MODEL_NAME} on device={device}, gpu={torch.cuda.is_available()}...", passthrough=False)
-    model_class = get_model_class(
-        model_name_or_path=MODEL_NAME,
-        processor_name=MODEL_NAME,
-        device=device,
-        logger=logger,
-        args=args, # larger arg dict not needed for model setup
-    )
+    # model_class = get_model_class(
+    #     model_name_or_path=MODEL_NAME,
+    #     processor_name=MODEL_NAME,
+    #     device=device,
+    #     logger=logger,
+    #     args=args, # larger arg dict not needed for model setup
+    # )
 
     yield new_log_event(logger, f"Generating caption for image={uploaded_img_path}...", passthrough=False)
     
@@ -106,17 +114,17 @@ def caption_uploaded_img(
     if os.path.exists(preprocessed_img_path):
         preprocessed_input = torch.load(preprocessed_img_path)
     else:
-        preprocessed_input = model_class.preprocessor(
+        preprocessed_input = llava_model_class.preprocessor(
             instruction=CAPTIONING_PROMPT,
             image_file=img_path,
             response="", # not provided bc we're doing generation
-            generation_mode=args.generation_mode
+            generation_mode=default_model_args.generation_mode
         )
         torch.save(preprocessed_input, preprocessed_img_path)
 
-    model = model_class.get_model()
+    model = llava_model_class.get_model()
     out = model.generate(
-        **preprocessed_input, max_new_tokens=args.max_new_tokens, do_sample=False
+        **preprocessed_input, max_new_tokens=default_model_args.max_new_tokens, do_sample=False
     )
 
     # Output tokens after prompt tokens, i.e. generated caption tokens
@@ -125,14 +133,14 @@ def caption_uploaded_img(
         if preprocessed_input["input_ids"].ndim > 1
         else preprocessed_input["input_ids"].shape[0]
     )
-    output_caption = model_class.get_tokenizer().batch_decode(
+    output_caption = llava_model_class.get_tokenizer().batch_decode(
         out[:, prompt_token_len:], skip_special_tokens=True
     )
 
-    # Record the end time
+
     end_time = time.perf_counter()
     elapsed_time = end_time - start_time
-    # save preprocessed_input..., caption
+
     yield new_log_event(logger, f"Generated caption for img={uploaded_img_path} in time={elapsed_time:.6f}s: '{output_caption}'", passthrough=False)
     yield new_event(event_type="caption", data=output_caption[0], passthrough=False)
 
@@ -143,41 +151,38 @@ async def get_hidden_state_for_input(
 ):
     start_time = time.perf_counter()
     # if preprocessed_input exists, load...
-    logger = setup_logger(LOG_FILE)
-    set_seed(SEED)
-    device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
     # filename and full path it's saved to by hooks
     hidden_state_filename, hidden_state_full_saved_path = get_output_hidden_state_paths(uploaded_img_path=uploaded_img_path, 
                                                                                         hook_name=HOOK_NAMES[0], 
                                                                                         token_of_interest=token_of_interest)
+    
+    # Load from cached if exists
+    if os.path.exists(hidden_state_full_saved_path):
+        yield new_log_event(logger, f"Loaded hidden state for img={uploaded_img_path} wrt token={token_of_interest} from path={hidden_state_full_saved_path}'")
+        cached_hidden_state = torch.load(hidden_state_full_saved_path)
+        yield new_event(event_type="return", data=cached_hidden_state)
+        return
+    
+    print(f"Cache not found at {hidden_state_full_saved_path}")
+
     args = get_arguments({
-        **CAPTIONING_ARGS,
+        **DEFAULT_CAPTIONING_ARGS,
         "save_filename": hidden_state_filename,
         "dataset_size": INFERENCE_SUBSET_SIZE,
         "split": INFERENCE_DATA_SPLIT,
         "token_of_interest": token_of_interest,
     })
     log_args(args, logger)
-    yield new_log_event(logger, f"Loading model={MODEL_NAME} on device={device}, gpu={torch.cuda.is_available()}...")
-    model_class = get_model_class(
-        model_name_or_path=MODEL_NAME,
-        processor_name=MODEL_NAME,
-        device=device,
-        logger=logger,
-        args=args, # larger arg dict not needed for model setup
-    )
 
+    yield new_log_event(logger, f"Extracting hidden state w.r.t. token={token_of_interest} for image={uploaded_img_path}...")
 
-    yield new_log_event(logger, f"Extracting captioning hidden state w.r.t. token={token_of_interest} for image={uploaded_img_path}...")
-    
-    # Run without hooks for first inference
     img_path = get_uploaded_img_full_path(uploaded_img_path)
     preprocessed_img_path = get_preprocessed_img_stored_path(uploaded_img_path)
     if os.path.exists(preprocessed_img_path):
         logger.info(f"Loading preprocessed image from path={preprocessed_img_path}")
         preprocessed_input = torch.load(preprocessed_img_path)
     else:
-        preprocessed_input = model_class.preprocessor(
+        preprocessed_input = llava_model_class.preprocessor(
             instruction=CAPTIONING_PROMPT,
             image_file=img_path,
             response="", # not provided bc we're doing generation
@@ -185,14 +190,14 @@ async def get_hidden_state_for_input(
         )
         torch.save(preprocessed_input, preprocessed_img_path)
     
-    model = model_class.get_model()
+    model = llava_model_class.get_model()
 
     # Set up forward hook - we need to save hidden state at token of interest this time
     hook_return_functions, hook_postprocessing_functions = setup_hooks(
         model=model,
         modules_to_hook=args.modules_to_hook,
         hook_names=args.hook_names,
-        tokenizer=model_class.get_tokenizer(),
+        tokenizer=llava_model_class.get_tokenizer(),
         logger=logger,
         args=args,
     )
@@ -219,7 +224,7 @@ async def get_hidden_state_for_input(
     )
 
     test_item["model_generated_output"] = out[:, prompt_token_len:]
-    test_item["model_predictions"] = model_class.get_tokenizer().batch_decode(
+    test_item["model_predictions"] = llava_model_class.get_tokenizer().batch_decode(
         out[:, prompt_token_len:], skip_special_tokens=True
     )
     
@@ -245,6 +250,8 @@ async def get_hidden_state_for_input(
                                 'token_of_interest_mask', 'hidden_states'], # save all fields, not just hidden_states
                      args=args, logger=logger)
     
+    print(f"Saved hidden state for img={uploaded_img_path} to {hidden_state_full_saved_path}")
+
     # Record the end time
     end_time = time.perf_counter()
     elapsed_time = end_time - start_time
@@ -254,46 +261,69 @@ async def get_hidden_state_for_input(
 
 
 @torch.no_grad()
-def get_hidden_states_for_training_samples(
+async def get_hidden_states_for_training_samples(
     token_of_interest: str,
+    sampled_subset_size: int,
 ):
-    # sampled_hidden_states_filename = ...
-    args = get_arguments({ # Should match save_features.sh
-        **DEFAULT_ARGS,
-        "dataset_size": DICTIONARY_LEARNING_SUBSET_SIZE,
+    sampled_hidden_states_filename, sampled_hidden_states_full_saved_path = get_output_hidden_state_paths(uploaded_img_path=None,
+                                                                                        hook_name=HOOK_NAMES[0],
+                                                                                        token_of_interest=token_of_interest)
+
+    # Load from cached if exists
+    if os.path.exists(sampled_hidden_states_full_saved_path):
+        cached_hidden_states = torch.load(sampled_hidden_states_full_saved_path)
+        yield new_log_event(logger, f"Loaded {len(cached_hidden_states['hidden_states'])} sampled hidden states for token={token_of_interest} from path={sampled_hidden_states_full_saved_path}'")
+        yield new_event(event_type="return", data=cached_hidden_states)
+        return
+
+    yield new_log_event(logger, f"Extracting hidden states for relevant training data samples...")
+    
+    # Argument setup
+    sampled_subset_size = max(DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, min(sampled_subset_size, COCO_TRAIN_FULL_SIZE))
+
+    batch_inference_args = get_arguments({ # Should match save_features.sh
+        **DEFAULT_CAPTIONING_ARGS,
+        "dataset_size": sampled_subset_size,
         "split": DICTIONARY_LEARNING_DATA_SPLIT,
         "save_filename": sampled_hidden_states_filename,
         "batch_size": 26,
         "programmatic": True,
     })
 
+    # Inference
     hook_return_functions, hook_postprocessing_functions = setup_hooks(
-        model=model_class.model_,
-        modules_to_hook=args.modules_to_hook,
-        hook_names=args.hook_names,
-        tokenizer=model_class.get_tokenizer(),
+        model=llava_model_class.model_,
+        modules_to_hook=batch_inference_args.modules_to_hook,
+        hook_names=batch_inference_args.hook_names,
+        tokenizer=llava_model_class.get_tokenizer(),
         logger=logger,
-        args=args,
+        args=batch_inference_args,
     )
+    
     loader = get_dataset_loader(
-        dataset_name=args.dataset_name, logger=logger, args=args,
+        dataset_name=batch_inference_args.dataset_name, logger=logger, args=batch_inference_args,
     )
 
     hook_data = inference(
         loader=loader,
-        model_class=model_class,
+        model_class=llava_model_class,
         hook_return_functions=hook_return_functions,
         device=device,
         logger=logger,
-        args=args,
+        args=batch_inference_args,
     )
 
-    clear_forward_hooks(model) # reset hooks so model can be reused
+    clear_forward_hooks(llava_model_class.get_model()) # reset hooks so model can be reused
 
     # Save features to file
     if hook_postprocessing_functions is not None:
         for func in hook_postprocessing_functions:
             if func is not None:
-                func(data=hook_data, args=args, logger=logger)
-    
-    return hook_data
+                func(data=hook_data, args=batch_inference_args, logger=logger)
+
+    end_time = time.perf_counter()
+    elapsed_time = end_time - start_time
+
+    yield new_log_event(logger, f"Extracted hidden states for relevant samples wrt token={token_of_interest} in time={elapsed_time:.6f}s'")
+    yield new_log_event(logger, f"Saved hidden state for relevant images to {sampled_hidden_states_full_saved_path}")
+    yield new_event(event_type="return", data=hook_data)

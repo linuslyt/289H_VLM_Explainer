@@ -37,8 +37,8 @@ def get_output_hidden_state_paths(uploaded_img_path: Union[str, None], hook_name
     else:
         img_name, _ = os.path.splitext(uploaded_img_path)
     
-    hidden_state_filename = f"{img_name}__{token_of_interest}"
-    hidden_state_full_saved_path = os.path.join(get_uploaded_img_dir(), "features", f"{hook_name}__{hidden_state_filename}.pth")
+    hidden_state_filename = f"_{img_name}__{token_of_interest}"
+    hidden_state_full_saved_path = os.path.join(get_uploaded_img_dir(), "features", f"{hook_name}_{hidden_state_filename}.pth")
     return hidden_state_filename, hidden_state_full_saved_path
 
 def get_preprocessed_img_stored_path(uploaded_img_filename):
