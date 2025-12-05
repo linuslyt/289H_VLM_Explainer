@@ -68,6 +68,7 @@ async def caption_image(uploaded_img_path: str):
     return StreamingResponse(caption_uploaded_img(uploaded_img_path), media_type="text/event-stream")
 
 async def importance_estimation_pipeline(uploaded_img_path: str, token_of_interest: str):
+    # Get hidden state for input instance wrt target token
     async for event_type, data in get_hidden_state_for_input(uploaded_img_path, token_of_interest):
         if event_type == "return":
             uploaded_img_hidden_state = data
@@ -75,6 +76,14 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
             yield new_event(event_type=event_type, data=data, passthrough=False)
 
     print(uploaded_img_hidden_state)
+    # async for event_type, data in get_hidden_states_for_training_samples(token_of_interest):
+    #     if event_type == "return":
+    #         uploaded_img_hidden_state = data
+    #     else:
+    #         yield new_event(event_type=event_type, data=data, passthrough=False)
+    
+    # Get hidden states for training samples that contain target token in ground truth captions
+
     # # Scores
     # await asyncio.sleep(0.5)
     # scores = {

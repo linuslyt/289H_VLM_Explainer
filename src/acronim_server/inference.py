@@ -19,6 +19,7 @@ from save_features import inference
 from analysis import analyse_features
 from analysis.feature_decomposition import get_feature_matrix, project_representations
 from acronim_server import (get_output_hidden_state_paths, get_uploaded_img_full_path,
+                            get_uploaded_img_dir, get_saved_hidden_states_dir,
                             get_preprocessed_img_stored_path,
                             new_log_event, new_event, CAPTIONING_PROMPT)
 import time
@@ -63,7 +64,7 @@ CAPTIONING_ARGS = {
     # we can set this to True so we only sample from those images for which we have a concept dictionary precomputed for.
     "select_token_of_interest_samples": True,
     "token_of_interest": TARGET_TOKEN,
-    "save_dir": OUT_DIR,
+    "save_dir": get_uploaded_img_dir(),
     "save_filename": uploaded_img_hidden_state_filename,
     "seed": SEED,
     "processor_name": MODEL_NAME,
@@ -86,10 +87,6 @@ def caption_uploaded_img(
     device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
     args = get_arguments({
         **CAPTIONING_ARGS,
-        # "save_filename": output_filename,
-        # "dataset_size": INFERENCE_SUBSET_SIZE,
-        # "split": INFERENCE_DATA_SPLIT,
-        # "token_of_interest": TARGET_TOKEN,
     })
     log_args(args, logger)
     yield new_log_event(logger, f"Loading model={MODEL_NAME} on device={device}, gpu={torch.cuda.is_available()}...", passthrough=False)
@@ -150,7 +147,9 @@ async def get_hidden_state_for_input(
     set_seed(SEED)
     device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
     # filename and full path it's saved to by hooks
-    hidden_state_filename, hidden_state_full_saved_path = get_output_hidden_state_paths(HOOK_NAMES[0], uploaded_img_path, token_of_interest)
+    hidden_state_filename, hidden_state_full_saved_path = get_output_hidden_state_paths(uploaded_img_path=uploaded_img_path, 
+                                                                                        hook_name=HOOK_NAMES[0], 
+                                                                                        token_of_interest=token_of_interest)
     args = get_arguments({
         **CAPTIONING_ARGS,
         "save_filename": hidden_state_filename,
@@ -168,13 +167,14 @@ async def get_hidden_state_for_input(
         args=args, # larger arg dict not needed for model setup
     )
 
-    # TODO: pass in chosen token
+
     yield new_log_event(logger, f"Extracting captioning hidden state w.r.t. token={token_of_interest} for image={uploaded_img_path}...")
     
     # Run without hooks for first inference
     img_path = get_uploaded_img_full_path(uploaded_img_path)
     preprocessed_img_path = get_preprocessed_img_stored_path(uploaded_img_path)
     if os.path.exists(preprocessed_img_path):
+        logger.info(f"Loading preprocessed image from path={preprocessed_img_path}")
         preprocessed_input = torch.load(preprocessed_img_path)
     else:
         preprocessed_input = model_class.preprocessor(
@@ -183,7 +183,7 @@ async def get_hidden_state_for_input(
             response="", # not provided bc we're doing generation
             generation_mode=args.generation_mode
         )
-    
+        torch.save(preprocessed_input, preprocessed_img_path)
     
     model = model_class.get_model()
 
@@ -255,11 +255,18 @@ async def get_hidden_state_for_input(
 
 @torch.no_grad()
 def get_hidden_states_for_training_samples(
-    model_class: ImageTextModel,
-    device: torch.device,
-    logger: Callable = None,
-    args: argparse.Namespace = None,
+    token_of_interest: str,
 ):
+    # sampled_hidden_states_filename = ...
+    args = get_arguments({ # Should match save_features.sh
+        **DEFAULT_ARGS,
+        "dataset_size": DICTIONARY_LEARNING_SUBSET_SIZE,
+        "split": DICTIONARY_LEARNING_DATA_SPLIT,
+        "save_filename": sampled_hidden_states_filename,
+        "batch_size": 26,
+        "programmatic": True,
+    })
+
     hook_return_functions, hook_postprocessing_functions = setup_hooks(
         model=model_class.model_,
         modules_to_hook=args.modules_to_hook,
