@@ -311,7 +311,7 @@ async def get_hidden_states_for_training_samples(
         args=batch_inference_args,
     )
 
-    clear_forward_hooks(model) # reset hooks so model can be reused
+    clear_forward_hooks(llava_model_class.get_model()) # reset hooks so model can be reused
 
     # Save features to file
     if hook_postprocessing_functions is not None:
