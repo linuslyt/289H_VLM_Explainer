@@ -27,13 +27,37 @@ import ConceptChart from './ConceptChart';
 // }
 const VisualizerColumn = ({ title, subtitle, data, type, color, bgColor, borderColor }) => {
   // Store refs to card elements: refs.current[concept_id] = DOMNode
-  // Clicking on bar will scroll to card
   const cardRefs = useRef({});
 
   // element of data.concept_order = concept index in dictionary
   // index of data.concept_order = order of concept by score
   if (isEmpty(data)) return;
   console.log(data)
+
+  // --- 1. Calculate Global Frequencies (Concept Frequency) ---
+  const textCounts = {};
+  const imageCounts = {};
+
+  // Count text occurrences
+  if (data.text_groundings) {
+    data.text_groundings.forEach(groundings => {
+      // Use Set to count unique presence per concept (Concept Frequency)
+      const uniqueWords = new Set(groundings);
+      uniqueWords.forEach(word => {
+        textCounts[word] = (textCounts[word] || 0) + 1;
+      });
+    });
+  }
+
+  // Count image occurrences
+  if (data.image_groundings) {
+    data.image_groundings.forEach(groundings => {
+      const uniqueImages = new Set(groundings);
+      uniqueImages.forEach(img => {
+        imageCounts[img] = (imageCounts[img] || 0) + 1;
+      });
+    });
+  }
 
   let concept_chart_data = data.scores.map((score, concept_index) => { // map (element, index)
     return {
@@ -45,8 +69,16 @@ const VisualizerColumn = ({ title, subtitle, data, type, color, bgColor, borderC
   let concept_card_data = data.concept_order.map((concept_index, concept_order) => { // map (element, index)
     return {
       score: data.scores[concept_index],
-      keywords: data.text_groundings[concept_index],
-      images: data.image_groundings[concept_index].map(img_path => `http://localhost:8000/grounding-images/${img_path}`).flatMap(item => Array(20).fill(item)), // for testing overflow
+      
+      // Map keywords to object { word, other_count }
+      keywords: data.text_groundings[concept_index].map(word => ({
+        word: word,
+        // "number of times the word appears in *other* concept's groundings"
+        // Total Count - 1 (for the current concept)
+        other_count: Math.max(0, (textCounts[word] || 1) - 1)
+      })),
+
+      images: data.image_groundings[concept_index].map(img_path => `http://localhost:8000/grounding-images/${img_path}`), //.flatMap(item => Array(20).fill(item)), // for testing overflow
       concept_id: concept_index + 1,
     };
   })
@@ -72,7 +104,7 @@ const VisualizerColumn = ({ title, subtitle, data, type, color, bgColor, borderC
         block: 'start' // Aligns top of card to top of scroll area
       });
       
-      // Add a temporary highlight effect
+      // Optional: Add a temporary highlight effect
       element.style.transition = "background-color 0.5s";
       const originalBg = element.style.backgroundColor;
       element.style.backgroundColor = "#fffde7"; // Light yellow highlight

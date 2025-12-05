@@ -11,7 +11,7 @@ const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
 
   return (
     <Card 
-      ref={domRef} // <--- Attach DOM ref here for scrolling
+      ref={domRef} // Attach DOM ref here for scrolling
       variant="outlined" 
       sx={{ 
         mb: 2, 
@@ -94,13 +94,15 @@ const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
 
         {/* Text Groundings */}
         <Typography variant="caption" color="text.secondary" display="block" mb={0.5}>
-          Text groundings
+          Text groundings ([n] = token seen in n other concepts)
         </Typography>
         <Box display="flex" flexWrap="wrap" gap={0.5}>
-          {concept.keywords.map((kw, idx) => (
+          {concept.keywords.map((kwObj, idx) => (
             <Chip 
               key={idx} 
-              label={kw} 
+              // Display format: word [n]
+              // kwObj is now an object: { word: "dog", other_count: 5 }
+              label={`${kwObj.word} [${kwObj.other_count + 1}]`} 
               size="small" 
               sx={{ 
                 height: 20, 
