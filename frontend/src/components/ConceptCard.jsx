@@ -2,6 +2,7 @@ import { Box, Card, CardContent, Chip, Stack, Typography } from '@mui/material';
 import ConceptBar from './ConceptBar';
 
 const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
+  console.log(maxScore)
   // 1. Determine Color based on type and score sign
   const scheme = color_scheme[type] || color_scheme.activations;
   const color = concept.score >= 0 ? scheme.pos : scheme.neg;
@@ -76,8 +77,8 @@ const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
                 src={img}
                 alt={`Visual grounding ${idx}`}
                 sx={{
-                  width: 48, 
-                  height: 48, 
+                  width: 192, 
+                  height: 192, 
                   borderRadius: 1, 
                   objectFit: 'cover',
                   bgcolor: '#f0f0f0',
@@ -92,7 +93,7 @@ const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
 
         {/* Text Groundings */}
         <Typography variant="caption" color="text.secondary" display="block" mb={0.5}>
-          Text groundings ([n] = frequency across concepts)
+          Text groundings ([n] = frequency in other concepts)
         </Typography>
         <Box display="flex" flexWrap="wrap" gap={0.5}>
           {sortedKeywords.map((kwObj, idx) => {
@@ -103,7 +104,6 @@ const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
             // - Common words: Gray/Uncolored
             
             let sx = {
-              height: 20, 
               fontSize: '0.7rem',
             };
 
@@ -116,7 +116,7 @@ const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
                 border: `1px solid ${color}`,
                 fontWeight: 'bold'
               };
-            } else if (count <= 4) {
+            } else if (count <= 2) {
               // Rare -> Light Tint
               sx = {
                 ...sx,
@@ -137,7 +137,7 @@ const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
             return (
               <Chip 
                 key={idx} 
-                label={`${kwObj.word} [${kwObj.other_count + 1}]`} 
+                label={kwObj.other_count == 0 ? `${kwObj.word}` : `${kwObj.word} [${kwObj.other_count}]`} 
                 size="small" 
                 sx={sx} 
               />

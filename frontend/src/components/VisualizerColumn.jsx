@@ -148,6 +148,7 @@ const VisualizerColumn = ({ title, subtitle, data, type, color, bgColor, borderC
               concept={concept} 
               type={type} 
               color_scheme={COLOR_SCHEME}
+              maxScore={Math.max(...data.scores)}
               // Register the ref for this specific concept ID
               domRef={(el) => (cardRefs.current[concept.concept_id] = el)}
             />
