@@ -12,7 +12,7 @@ from helpers.logger import log_args, setup_logger
 from helpers.utils import (clear_forward_hooks, clear_hooks_variables, get_most_free_gpu,
                            get_vocab_idx_of_target_token, get_first_pos_of_token_of_interest,
                            set_seed, setup_hooks, update_dict_of_list)
-from models import get_model_class, get_module_by_path
+from models import get_module_by_path
 from models.image_text_model import ImageTextModel
 
 from save_features import inference
@@ -22,6 +22,7 @@ from acronim_server import (get_output_hidden_state_paths, get_uploaded_img_save
                             get_uploaded_img_dir, get_saved_hidden_states_dir,
                             get_output_concept_dictionary_path,
                             get_saved_concept_dicts_dir,
+                            get_llava_model_class,
                             new_log_event, new_event, CAPTIONING_PROMPT)
 import time
 
@@ -78,17 +79,94 @@ device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu
 LOG_FILE=os.path.join(os.path.join(OUT_DIR, f"acronim_{datetime.now().strftime('%m-%d-%Y_%H-%M-%S')}.log"))
 logger = setup_logger(LOG_FILE)
 
-default_model_args = get_arguments(DEFAULT_CAPTIONING_ARGS)
-llava_model_class = get_model_class(
-    model_name_or_path=MODEL_NAME,
-    processor_name=MODEL_NAME,
-    device=device,
-    logger=logger,
-    args=default_model_args, # larger arg dict not needed for model setup
-)
+llava_model_class = get_llava_model_class()
 model = llava_model_class.get_model()
 
-async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_state_path, concept_dict, force_recompute: bool=True):
+def get_concept_grad_at_target_token_step(
+    model_class,
+    test_item, # saved from single_inference()
+    token_index, # token_index is the index of the token in the generated tokens (including prompt tokens).
+                 # this is the index returned by get_first_pos_of_token_of_interest().
+    h_recon_torch, # hidden state of test item for target token, projected onto global concept dictionary for target token
+    target_id, # vocabulary index of target token. should be from get_vocab_idx_of_target_token()
+    concept_matrix, # shape: [N_concepts, Hidden_Dim] (e.g., [20, 4096])
+):
+    # model = model_class.get_model()
+    layer_name = "language_model.model.layers.31"
+    target_layer = get_module_by_path(model, layer_name)
+    
+    # Load full token sequence predicted previously. 
+    full_sequence = test_item["model_output"][0] # shape: [1, seq_len]
+    # print(f"full_sequence.shape={full_sequence.shape}")
+
+    # Context up to, i.e. excluding, target token
+    # If "motorcycle" is at index K, we input tokens [0 ... K-1]
+    # The model will then try to predict token K ("motorcycle")
+    input_up_to_target_token = full_sequence[:, :token_index]
+
+    # Call model() for last forward pass to generate target token.
+    # Patch hidden state with differentiable state reconstructed from projection onto concept dictionary.
+    def replace_token_hidden_state(module, input, output):
+        # output is a tuple: (hidden_states, self_attn, present_kv)
+        hidden_states = output[0] # tensor [batch, seq, dim]
+        rest_output = output[1:]
+
+        # clone so autograd works as expected
+        new_hidden = hidden_states.clone()
+
+        # Patch the hidden state generated in the last timestep before the token of interest
+        # If the target word translates to multiple subtokens, patch with the hidden state before the target's first subtoken
+        new_hidden[0, -1, :] = h_recon_torch
+
+        # return same structure transformer expects
+        return (new_hidden, *rest_output)
+
+
+    hook_handle = target_layer.register_forward_hook(replace_token_hidden_state)
+
+    with torch.enable_grad():
+        outputs = model(
+            input_ids=input_up_to_target_token,
+            output_hidden_states=False,
+            use_cache=False,
+        )
+    
+    # Extract logits for target token
+    logits = outputs.logits[:, -1, :]  # shape [1, vocab]
+
+    # If target_id is a tensor/list, i.e. the target word translates to multiple subtokens, use the position of the first one
+    if hasattr(target_id, '__len__') and len(target_id) > 1:
+        scalar_target_id = target_id[0]
+    else:
+        scalar_target_id = target_id
+        
+    target_logit = logits[0, scalar_target_id]
+
+    print("target_logit:", target_logit, "requires_grad:", getattr(target_logit, "requires_grad", None))
+    print("h_recon_torch.requires_grad:", h_recon_torch.requires_grad)
+
+    # Clean up previous gradients
+    model.zero_grad()
+    if h_recon_torch.grad is not None:
+        h_recon_torch.grad.zero_()
+
+    # Backprop to calculate gradient for target token logit
+    target_logit.backward()
+    grad_wrt_input = h_recon_torch.grad
+
+    # Compute Gradient w.r.t Concept Activations
+    concept_matrix = concept_matrix.to(device=model.device, dtype=grad_wrt_input.dtype) # ensure it's on the same device/dtype=fp16
+    grad_wrt_concepts = grad_wrt_input @ concept_matrix.T  # TODO: check if need transpose
+    # grads shape: [1, 4096]
+    # concept_matrix.T shape: [4096, 20]
+    # result shape: [1, 20]
+    print(f"Concept Gradients shape: {grad_wrt_concepts.shape}")
+    print(grad_wrt_concepts)
+
+    hook_handle.remove()
+    return grad_wrt_concepts
+
+async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_state_path, uploaded_img_hidden_state, concept_dict, force_recompute: bool=True):
     start_time = time.perf_counter()
     yield new_log_event(logger, f"Calculating concept importance...")
     print("tok:", token_of_interest)
@@ -97,7 +175,7 @@ async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_st
     # # From concept_grounding_visualization.ipynb example
     data = torch.load(uploaded_img_hidden_state_path, map_location="cpu")
     print(data)
-    test_item = data
+    test_item = uploaded_img_hidden_state
     feat = get_feature_matrix(data["hidden_states"], module_name="language_model.model.layers.31", token_idx=None)
     print(feat)
     projections = project_representations(
@@ -129,9 +207,9 @@ async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_st
     print(f"target_token_first_idx_in_caption_output={target_token_first_idx_in_caption_output}")
     # exit()
 
-    v_X = torch.tensor(projections)
+    target_dtype = concept_dict["concepts"].dtype
+    v_X = torch.tensor(projections).to(dtype=target_dtype)
     h_recon = v_X @ concept_dict["concepts"]
-    print(f"h_recon_type:{type(h_recon)}, test_input_type:{type(preprocessed_test_input[0])}")
     h_recon_torch = h_recon.to(dtype=model.dtype, device=model.device).clone().detach().requires_grad_(True)
     torch.save(h_recon_torch, "motorcycle_recon.pth")
     print(f"h_recon_torch.shape={h_recon_torch.shape}")
@@ -140,7 +218,7 @@ async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_st
     # need to modify token_index by start of caption token offset
     # get offset from -test_item.get("model_output")[0]
     concept_grads = get_concept_grad_at_target_token_step(
-        model_class=llava_model,
+        model_class=llava_model_class,
         test_item=test_item,
         token_index=target_token_first_idx_in_entire_output,
         h_recon_torch=h_recon_torch,

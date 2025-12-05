@@ -13,6 +13,7 @@ from typing import Union
 from acronim_server import new_event, get_uploaded_img_saved_path
 from acronim_server.inference import caption_uploaded_img, get_hidden_state_for_input, get_hidden_states_for_training_samples
 from acronim_server.dictionary_learning import learn_concept_dictionary_for_token
+from acronim_server.concept_importance import calculate_concept_importance
 
 from helpers.utils import (get_most_free_gpu)
 
@@ -72,11 +73,12 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
     # Get hidden state for input instance wrt target token
     async for event_type, data in get_hidden_state_for_input(uploaded_img_path, token_of_interest):
         if event_type == "return":
-            uploaded_img_hidden_state = data
+            print("retdata:", data)
+            uploaded_img_hidden_state_path, uploaded_img_hidden_state = data
         else:
             yield new_event(event_type=event_type, data=data, passthrough=False)
 
-    print(uploaded_img_hidden_state.keys())
+    print("here2:", uploaded_img_hidden_state_path)
 
     # Get hidden states from training data samples that contain token of interest in ground truth caption
     async for event_type, data in get_hidden_states_for_training_samples(token_of_interest, sampled_subset_size):
@@ -88,7 +90,7 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
     print(relevant_samples_hidden_state.keys())
 
     # Learn concept dictionary
-    async for event_type, data in learn_concept_dictionary_for_token(token_of_interest):
+    async for event_type, data in learn_concept_dictionary_for_token(token_of_interest, sampled_subset_size):
         if event_type == "return":
             concept_dict_for_token = data
         else:
@@ -96,13 +98,13 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
     
     print(concept_dict_for_token.keys())
 
-    # # Scores
-    # await asyncio.sleep(0.5)
-    # scores = {
-    #     "importance": [],
-    #     "activations": [],
-    # }
-    # # yield activations before yielding importances
+    # Calculate concept importance
+    async for event_type, data in calculate_concept_importance(token_of_interest, uploaded_img_hidden_state_path, uploaded_img_hidden_state, concept_dict_for_token):
+        if event_type == "return":
+            importance_scores = data
+        else:
+            yield new_event(event_type=event_type, data=data, passthrough=False)
+    
     # yield new_event(event_type="scores", data=scores) # On frontend, retrieve with JSON.parse(event.data);
 
 @app.get("/importance-estimation")

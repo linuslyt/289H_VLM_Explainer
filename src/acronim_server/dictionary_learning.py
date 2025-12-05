@@ -12,7 +12,7 @@ from helpers.logger import log_args, setup_logger
 from helpers.utils import (clear_forward_hooks, clear_hooks_variables, get_most_free_gpu,
                            get_vocab_idx_of_target_token, get_first_pos_of_token_of_interest,
                            set_seed, setup_hooks, update_dict_of_list)
-from models import get_model_class, get_module_by_path
+from models import get_module_by_path
 from models.image_text_model import ImageTextModel
 
 from save_features import inference
@@ -22,6 +22,7 @@ from acronim_server import (get_output_hidden_state_paths, get_uploaded_img_save
                             get_uploaded_img_dir, get_saved_hidden_states_dir,
                             get_output_concept_dictionary_path,
                             get_saved_concept_dicts_dir,
+                            get_dict_model_class,
                             new_log_event, new_event, CAPTIONING_PROMPT)
 import time
 
@@ -79,24 +80,17 @@ DEFAULT_LEARNING_ARGS = {
     "decomposition_method": "snmf",
 }
 
-FORCE_RECOMPUTE=False # TODO: make script argument
+FORCE_RECOMPUTE=True
 
 set_seed(SEED)
-dict_learning_device = torch.device("cpu")
 
 LOG_FILE=os.path.join(os.path.join(OUT_DIR, f"acronim_{datetime.now().strftime('%m-%d-%Y_%H-%M-%S')}.log"))
 logger = setup_logger(LOG_FILE)
 
 default_learning_args = get_arguments(DEFAULT_LEARNING_ARGS)
-dict_learning_model_class = get_model_class(
-    model_name_or_path=MODEL_NAME,
-    processor_name=MODEL_NAME,
-    device=dict_learning_device,
-    logger=logger,
-    args=default_learning_args,
-)
+dict_learning_model_class = get_dict_model_class()
 
-async def learn_concept_dictionary_for_token(token_of_interest: str, force_recompute: bool=True):
+async def learn_concept_dictionary_for_token(token_of_interest: str, sampled_subset_size: int, force_recompute: bool=FORCE_RECOMPUTE):
     concept_dict_filename, concept_dict_full_saved_path = get_output_concept_dictionary_path(token_of_interest)
     if os.path.exists(concept_dict_full_saved_path) and not force_recompute:
         cached_concept_dict = torch.load(concept_dict_full_saved_path)
@@ -114,6 +108,7 @@ async def learn_concept_dictionary_for_token(token_of_interest: str, force_recom
         "save_dir": get_saved_concept_dicts_dir(),
         "save_filename": concept_dict_filename,
         "features_path": sampled_hidden_states_full_saved_path,
+        "dataset_size": sampled_subset_size,
     })
 
     log_args(learning_args, logger)
@@ -122,7 +117,7 @@ async def learn_concept_dictionary_for_token(token_of_interest: str, force_recom
         logger=logger,
         token_of_interest=token_of_interest,
         model_class=dict_learning_model_class,
-        device=dict_learning_device,
+        device=torch.device("cpu"),
         args=learning_args,
     )
 

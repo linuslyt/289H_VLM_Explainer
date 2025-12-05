@@ -21,6 +21,7 @@ from analysis.feature_decomposition import get_feature_matrix, project_represent
 from acronim_server import (get_output_hidden_state_paths, get_uploaded_img_saved_path,
                             get_uploaded_img_dir, get_saved_hidden_states_dir,
                             get_preprocessed_img_saved_path,
+                            get_llava_model_class,
                             new_log_event, new_event, CAPTIONING_PROMPT)
 import time
 
@@ -71,7 +72,8 @@ DEFAULT_CAPTIONING_ARGS = {
     "batch_size": 1,
 }
 
-FORCE_RECOMPUTE=False # TODO: make script argument
+FORCE_RECOMPUTE=True
+default_model_args = get_arguments(DEFAULT_CAPTIONING_ARGS)
 
 set_seed(SEED)
 device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
@@ -79,20 +81,13 @@ device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu
 LOG_FILE=os.path.join(os.path.join(OUT_DIR, f"acronim_{datetime.now().strftime('%m-%d-%Y_%H-%M-%S')}.log"))
 logger = setup_logger(LOG_FILE)
 
-default_model_args = get_arguments(DEFAULT_CAPTIONING_ARGS)
-llava_model_class = get_model_class(
-    model_name_or_path=MODEL_NAME,
-    processor_name=MODEL_NAME,
-    device=device,
-    logger=logger,
-    args=default_model_args, # larger arg dict not needed for model setup
-)
+llava_model_class = get_llava_model_class()
 model = llava_model_class.get_model()
 
 @torch.no_grad()
 def caption_uploaded_img(
     uploaded_img_path: str,
-    force_recompute: bool = True,
+    force_recompute: bool=FORCE_RECOMPUTE,
 ):
     start_time = time.perf_counter()
     # if preprocessed_input exists, load...
@@ -149,7 +144,7 @@ def caption_uploaded_img(
 async def get_hidden_state_for_input(
     uploaded_img_path: str,
     token_of_interest: str,
-    force_recompute: bool = True,
+    force_recompute: bool=FORCE_RECOMPUTE,
 ):
     start_time = time.perf_counter()
     # if preprocessed_input exists, load...
@@ -160,7 +155,7 @@ async def get_hidden_state_for_input(
     if os.path.exists(hidden_state_full_saved_path) and not force_recompute:
         yield new_log_event(logger, f"Loaded hidden state for img={uploaded_img_path} wrt token={token_of_interest} from path={hidden_state_full_saved_path}'")
         cached_hidden_state = torch.load(hidden_state_full_saved_path)
-        yield new_event(event_type="return", data=cached_hidden_state)
+        yield new_event(event_type="return", data=(hidden_state_full_saved_path, cached_hidden_state))
         return
 
     args = get_arguments({
@@ -254,14 +249,15 @@ async def get_hidden_state_for_input(
     elapsed_time = end_time - start_time
     # save preprocessed_input..., caption
     yield new_log_event(logger, f"Extracted hidden state for img={uploaded_img_path} wrt token={token_of_interest} in time={elapsed_time:.6f}s'")
-    yield new_event(event_type="return", data=hook_data)
+    yield new_event(event_type="return", data=(hidden_state_full_saved_path, hook_data))
+    # yield new_event(event_type="return", data=hook_data)
 
 
 @torch.no_grad()
 async def get_hidden_states_for_training_samples(
     token_of_interest: str,
     sampled_subset_size: int,
-    force_recompute: bool = True,
+    force_recompute: bool=FORCE_RECOMPUTE,
 ):
     sampled_hidden_states_filename, sampled_hidden_states_full_saved_path = get_output_hidden_state_paths(token_of_interest=token_of_interest)
 

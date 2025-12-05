@@ -42,6 +42,7 @@ SEED=28
 OUT_DIR="/home/ytllam/xai/xl-vlms/out/gradient_concept"
 LOG_FILE=os.path.join(os.path.join(OUT_DIR, f"importance_estimation_{datetime.now().strftime('%m-%d-%Y_%H-%M-%S')}_{TARGET_TOKEN}.log"))
 DICT_ANALYSIS_NAME="decompose_activations_text_grounding_image_grounding"
+device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
 
 DEFAULT_ARGS = {
     "model_name_or_path": MODEL_NAME,
@@ -199,7 +200,6 @@ def get_hidden_states_of_relevant_samples(
     return hook_data
 
 
-# UNTESTED
 def get_concept_grad_at_target_token_step(
     model_class,
     test_item, # saved from single_inference()
@@ -287,7 +287,6 @@ def get_concept_grad_at_target_token_step(
 if __name__ == "__main__":
     logger = setup_logger(LOG_FILE)
     set_seed(SEED)
-    device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
 
     logger.info(f"Loading model={MODEL_NAME} on device={device}, gpu={torch.cuda.is_available()}...")
     model_setup_args = get_arguments({
@@ -440,12 +439,9 @@ if __name__ == "__main__":
     # exit()
 
     v_X = torch.tensor(projections)
-    # TypeError: unsupported operand type(s) for @: 'numpy.ndarray' and 'Tensor'
     h_recon = v_X @ global_concept_dict_for_token["concepts"]
-    print(f"h_recon_type:{type(h_recon)}, test_input_type:{type(preprocessed_test_input[0])}")
     h_recon_torch = h_recon.to(dtype=llava_model.get_model().dtype, device=llava_model.get_model().device).clone().detach().requires_grad_(True)
     torch.save(h_recon_torch, "motorcycle_recon.pth")
-    # h_recon_torch = h_recon.clone().detach().requires_grad_(True)
     print(f"h_recon_torch.shape={h_recon_torch.shape}")
 
 
