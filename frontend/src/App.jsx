@@ -114,10 +114,10 @@ function App() {
       const params = new URLSearchParams({
         uploaded_img_path: uploadedImgPath,
         token_of_interest: token,
-        sampled_subset_size: 5000,
-        sampling_inference_batch_size: 20, // TODO: add input for this
+        sampled_subset_size: 22783,
+        sampling_inference_batch_size: 10, // TODO: add input for this
         n_concepts: 10, // TODO: add slider for this
-        force_recompute: false // TODO: add button to toggle this. Also set to true if n_concepts or sampled_subset_size changes for the same token of interest.
+        force_recompute: false, // TODO: add button to toggle this. Also set to true if n_concepts or sampled_subset_size changes for the same token of interest.
       });
 
       const encodedExplainURL = `${baseExplainUrl}?${params.toString()}`;

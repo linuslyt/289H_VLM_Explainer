@@ -9,16 +9,17 @@ const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
   // 2. Determine Label
   const label = type === 'importance' ? 'Impt' : 'Actv';
 
+  // 3. Sort keywords by [n] (other_count) increasing
+  const sortedKeywords = [...concept.keywords].sort((a, b) => a.other_count - b.other_count);
+
   return (
     <Card 
-      ref={domRef} // Attach DOM ref here for scrolling
+      ref={domRef} 
       variant="outlined" 
       sx={{ 
         mb: 2, 
         borderRadius: 2, 
         borderColor: '#eeeeee', 
-        // scrollMarginTop ensures the card doesn't get hidden behind 
-        // any fixed headers when scrolled into view
         scrollMarginTop: '10px' 
       }}
     >
@@ -30,9 +31,6 @@ const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
             Concept {concept.concept_id}
           </Typography>
           
-          {/* Passed maxScore for relative scaling.
-            The bar now flexes to fill available space in the row.
-          */}
           <ConceptBar 
             score={concept.score} 
             maxScore={maxScore} 
@@ -94,25 +92,57 @@ const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
 
         {/* Text Groundings */}
         <Typography variant="caption" color="text.secondary" display="block" mb={0.5}>
-          Text groundings ([n] = token seen in n other concepts)
+          Text groundings ([n] = frequency across concepts)
         </Typography>
         <Box display="flex" flexWrap="wrap" gap={0.5}>
-          {concept.keywords.map((kwObj, idx) => (
-            <Chip 
-              key={idx} 
-              // Display format: word [n]
-              // kwObj is now an object: { word: "dog", other_count: 5 }
-              label={`${kwObj.word} [${kwObj.other_count + 1}]`} 
-              size="small" 
-              sx={{ 
-                height: 20, 
-                fontSize: '0.7rem', 
-                bgcolor: `${color}15`, // very light opacity using hex alpha
+          {sortedKeywords.map((kwObj, idx) => {
+            const count = kwObj.other_count;
+            // Dynamic threshold logic:
+            // - Unique words (count == 0): Solid Highlight
+            // - Rare words (count <= 2): Light Highlight
+            // - Common words: Gray/Uncolored
+            
+            let sx = {
+              height: 20, 
+              fontSize: '0.7rem',
+            };
+
+            if (count === 0) {
+              // Unique -> Strong Color
+              sx = {
+                ...sx,
+                bgcolor: color,
+                color: '#ffffff',
+                border: `1px solid ${color}`,
+                fontWeight: 'bold'
+              };
+            } else if (count <= 4) {
+              // Rare -> Light Tint
+              sx = {
+                ...sx,
+                bgcolor: `${color}15`, // 15 = ~8% opacity
                 color: color,
                 border: `1px solid ${color}40`
-              }} 
-            />
-          ))}
+              };
+            } else {
+              // Common -> Gray
+              sx = {
+                ...sx,
+                bgcolor: '#f9fafb',
+                color: 'text.secondary',
+                border: '1px solid #e0e0e0'
+              };
+            }
+
+            return (
+              <Chip 
+                key={idx} 
+                label={`${kwObj.word} [${kwObj.other_count + 1}]`} 
+                size="small" 
+                sx={sx} 
+              />
+            );
+          })}
         </Box>
       </CardContent>
     </Card>
