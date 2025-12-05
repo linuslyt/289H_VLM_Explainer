@@ -73,10 +73,27 @@ async def caption_image(uploaded_img_path: str):
     print(f"captioning image for {uploaded_img_path}")
     return StreamingResponse(caption_uploaded_img(uploaded_img_path), media_type="text/event-stream")
 
-async def importance_estimation_pipeline(uploaded_img_path: str, token_of_interest: str, sampled_subset_size: int, n_concepts: int, force_recompute: bool):
+def clamp_value(val, min_val, max_val):
+    if val < min_val:
+        return min_val
+    elif val > max_val:
+        return max_val
+    else:
+        return val
+
+async def importance_estimation_pipeline(uploaded_img_path: str, token_of_interest: str, sampled_subset_size: int, 
+                                         sampling_inference_batch_size: int, n_concepts: int, force_recompute: bool):
     # Clamp sampled subset
-    sampled_subset_size = max(DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, min(sampled_subset_size, COCO_TRAIN_FULL_SIZE))
+    sampled_subset_size = clamp_value(sampled_subset_size, min_val=DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, max_val=COCO_TRAIN_FULL_SIZE)
     yield new_event(event_type="log", data=f"Clamping sampled_subset_size to {sampled_subset_size}.", passthrough=False)
+
+    # Clamp max concepts
+    n_concepts = clamp_value(n_concepts, min_val=3, max_val=20)
+    yield new_event(event_type="log", data=f"Clamping n_concepts to {n_concepts}.", passthrough=False)
+
+    # Clamp sampling_inference_batch_size
+    sampling_inference_batch_size = clamp_value(sampling_inference_batch_size, min_val=1, max_val=50)
+    yield new_event(event_type="log", data=f"Clamping sampling_inference_batch_size to {sampling_inference_batch_size}.", passthrough=False)
 
     # Get hidden state for input instance wrt target token
     async for event_type, data in get_hidden_state_for_input(uploaded_img_path, token_of_interest, force_recompute):
@@ -89,7 +106,8 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
     print("here2:", uploaded_img_hidden_state_path)
 
     # Get hidden states from training data samples that contain token of interest in ground truth caption
-    async for event_type, data in get_hidden_states_for_training_samples(token_of_interest, sampled_subset_size, force_recompute):
+    async for event_type, data in get_hidden_states_for_training_samples(token_of_interest, sampled_subset_size, 
+                                                                         force_recompute, batch_size=sampling_inference_batch_size):
         if event_type == "return":
             relevant_samples_hidden_state = data
         else:
@@ -130,9 +148,10 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
 
 @app.get("/importance-estimation")
 async def importance_estimation(uploaded_img_path: str, token_of_interest: str, 
-                                sampled_subset_size: int = 5000, n_concepts: int = 10,
-                                force_recompute: bool = False):
-    return StreamingResponse(importance_estimation_pipeline(uploaded_img_path, token_of_interest, sampled_subset_size, n_concepts, force_recompute), media_type="text/event-stream")
+                                sampled_subset_size: int = 5000, sampling_inference_batch_size: int = 26, 
+                                n_concepts: int = 10, force_recompute: bool = False):
+    return StreamingResponse(importance_estimation_pipeline(uploaded_img_path, token_of_interest, sampled_subset_size,
+                                                            sampling_inference_batch_size, n_concepts, force_recompute), media_type="text/event-stream")
 
 # Gronuding images can be retrieved by filename - e.g. http://localhost:8000/grounding-images/COCO_train2014_000000095381.jpg
 app.mount("/grounding-images", StaticFiles(directory=get_grounding_image_dir()), name="grounding-images")

@@ -91,40 +91,48 @@ default_learning_args = get_arguments(DEFAULT_LEARNING_ARGS)
 dict_learning_model_class = get_dict_model_class()
 
 async def learn_concept_dictionary_for_token(token_of_interest: str, sampled_subset_size: int, n_concepts: int=DEFAULT_NUM_CONCEPTS, force_recompute: bool=FORCE_RECOMPUTE):
-    concept_dict_filename, concept_dict_full_saved_path = get_output_concept_dictionary_path(token_of_interest)
-    if os.path.exists(concept_dict_full_saved_path) and not force_recompute:
-        cached_concept_dict = torch.load(concept_dict_full_saved_path)
-        yield new_log_event(logger, f"Loaded concept dict for token={token_of_interest} from path={concept_dict_full_saved_path}'")
-        yield new_event(event_type="return", data=cached_concept_dict)
+    try:
+        concept_dict_filename, concept_dict_full_saved_path = get_output_concept_dictionary_path(token_of_interest)
+        if os.path.exists(concept_dict_full_saved_path) and not force_recompute:
+            cached_concept_dict = torch.load(concept_dict_full_saved_path)
+            yield new_log_event(logger, f"Loaded concept dict for token={token_of_interest} from path={concept_dict_full_saved_path}'")
+            yield new_event(event_type="return", data=cached_concept_dict)
+            return
+
+        _, sampled_hidden_states_full_saved_path = get_output_hidden_state_paths(token_of_interest)
+
+        start_time = time.perf_counter()
+        yield new_log_event(logger, f"Learning concept dictionary for token={token_of_interest}, n_concepts={n_concepts}...")
+        
+        learning_args = get_arguments({
+            **DEFAULT_LEARNING_ARGS,
+            "save_dir": get_saved_concept_dicts_dir(),
+            "save_filename": concept_dict_filename,
+            "features_path": sampled_hidden_states_full_saved_path,
+            "dataset_size": sampled_subset_size,
+            "num_concepts": [n_concepts],
+        })
+
+        log_args(learning_args, logger)
+        global_concept_dict_for_token = analyse_features(
+            analysis_name=learning_args.analysis_name,
+            logger=logger,
+            token_of_interest=token_of_interest,
+            model_class=dict_learning_model_class,
+            device=torch.device("cpu"),
+            args=learning_args,
+        )
+
+        end_time = time.perf_counter()
+        elapsed_time = end_time - start_time
+
+        yield new_log_event(logger, f"Saved learned concept dictionary for token={token_of_interest} to {concept_dict_full_saved_path}")
+        yield new_log_event(logger, f"Learned concept dictionary for token={token_of_interest} in time={elapsed_time:.6f}s'")
+        yield new_event(event_type="return", data=global_concept_dict_for_token)
+    except Exception as e:
+        if "CUDA out of memory" in str(e):
+            yield new_event(event_type="error", data="CUDA ran out of memory. Try using a smaller sampling inference batch size.")
+        else:
+            # Dictionary learning might fail if there are not enough relevant samples in the sampled subset.
+            yield new_event(event_type="error", data=f"Ran into an error when learning concept dictionary for token={token_of_interest}. Try again or try a different token/n_concepts/sampled_subset_size.\n{str(e)}")
         return
-
-    _, sampled_hidden_states_full_saved_path = get_output_hidden_state_paths(token_of_interest)
-
-    start_time = time.perf_counter()
-    yield new_log_event(logger, f"Learning concept dictionary for token={token_of_interest}, n={n_concepts}...")
-    
-    learning_args = get_arguments({
-        **DEFAULT_LEARNING_ARGS,
-        "save_dir": get_saved_concept_dicts_dir(),
-        "save_filename": concept_dict_filename,
-        "features_path": sampled_hidden_states_full_saved_path,
-        "dataset_size": sampled_subset_size,
-        "num_concepts": [n_concepts],
-    })
-
-    log_args(learning_args, logger)
-    global_concept_dict_for_token = analyse_features(
-        analysis_name=learning_args.analysis_name,
-        logger=logger,
-        token_of_interest=token_of_interest,
-        model_class=dict_learning_model_class,
-        device=torch.device("cpu"),
-        args=learning_args,
-    )
-
-    end_time = time.perf_counter()
-    elapsed_time = end_time - start_time
-
-    yield new_log_event(logger, f"Saved learned concept dictionary for token={token_of_interest} to {concept_dict_full_saved_path}")
-    yield new_log_event(logger, f"Learned concept dictionary for token={token_of_interest} in time={elapsed_time:.6f}s'")
-    yield new_event(event_type="return", data=global_concept_dict_for_token)
