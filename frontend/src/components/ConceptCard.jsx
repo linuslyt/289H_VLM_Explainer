@@ -1,61 +1,148 @@
-import React from 'react';
-import { Box, Card, CardContent, Typography, Chip, Stack } from '@mui/material';
+import { Box, Card, CardContent, Chip, Stack, Typography } from '@mui/material';
 import ConceptBar from './ConceptBar';
 
-const ConceptCard = ({ concept, type }) => {
-  // Type determines color: 'global' -> Blue, 'local' -> Green
-  const color = type === 'global' ? '#2196f3' : '#4caf50';
-  const label = type === 'global' ? 'Actv' : 'Impt';
+const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
+  // 1. Determine Color based on type and score sign
+  const scheme = color_scheme[type] || color_scheme.activations;
+  const color = concept.score >= 0 ? scheme.pos : scheme.neg;
+  
+  // 2. Determine Label
+  const label = type === 'importance' ? 'Impt' : 'Actv';
+
+  // 3. Sort keywords by [n] (other_count) increasing
+  const sortedKeywords = [...concept.keywords].sort((a, b) => a.other_count - b.other_count);
 
   return (
-    <Card variant="outlined" sx={{ mb: 2, borderRadius: 2, borderColor: '#eeeeee' }}>
+    <Card 
+      ref={domRef} 
+      variant="outlined" 
+      sx={{ 
+        mb: 2, 
+        borderRadius: 2, 
+        borderColor: '#eeeeee', 
+        scrollMarginTop: '10px' 
+      }}
+    >
       <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+        
+        {/* Header: ID and Bar */}
         <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-          <Typography variant="subtitle2" fontWeight="bold">
-            {concept.id}
+          <Typography variant="caption" fontWeight="bold" flexShrink={0}>
+            Concept {concept.concept_id}
           </Typography>
-          <ConceptBar score={concept.score} color={color} label={label} />
+          
+          <ConceptBar 
+            score={concept.score} 
+            maxScore={maxScore} 
+            color={color} 
+            label={label} 
+          />
         </Box>
 
+        {/* Image Groundings */}
         <Typography variant="caption" color="text.secondary" display="block" mb={0.5}>
-          Representative Images
+          Image groundings
         </Typography>
-        <Stack direction="row" spacing={1} mb={1.5}>
+        <Stack 
+          direction="row" 
+          spacing={1} 
+          mb={1.5}
+          sx={{
+            overflowX: 'auto',
+            pb: 1, 
+            scrollbarWidth: 'thin',
+            '&::-webkit-scrollbar': { height: '6px' },
+            '&::-webkit-scrollbar-thumb': { 
+              backgroundColor: 'rgba(0,0,0,0.2)', 
+              borderRadius: '3px' 
+            }
+          }}
+        >
           {concept.images.map((img, idx) => (
             <Box 
               key={idx}
-              component="img"
-              src={img}
-              alt={`Visual grounding ${idx}`}
+              component="a" 
+              href={img}
+              target="_blank"
+              rel="noopener noreferrer" 
               sx={{ 
-                width: 48, 
-                height: 48, 
-                borderRadius: 1, 
-                objectFit: 'cover',
-                bgcolor: '#f0f0f0'
+                flexShrink: 0, 
+                textDecoration: 'none',
+                display: 'block' 
               }}
-            />
+            >
+              <Box 
+                component="img"
+                src={img}
+                alt={`Visual grounding ${idx}`}
+                sx={{
+                  width: 48, 
+                  height: 48, 
+                  borderRadius: 1, 
+                  objectFit: 'cover',
+                  bgcolor: '#f0f0f0',
+                  cursor: 'pointer',
+                  transition: 'opacity 0.2s',
+                  '&:hover': { opacity: 0.8 }
+                }}
+              />
+            </Box>
           ))}
         </Stack>
 
+        {/* Text Groundings */}
         <Typography variant="caption" color="text.secondary" display="block" mb={0.5}>
-          Associated Keywords
+          Text groundings ([n] = frequency across concepts)
         </Typography>
         <Box display="flex" flexWrap="wrap" gap={0.5}>
-          {concept.keywords.map((kw, idx) => (
-            <Chip 
-              key={idx} 
-              label={kw} 
-              size="small" 
-              sx={{ 
-                height: 20, 
-                fontSize: '0.7rem', 
-                bgcolor: `${color}15`, // very light opacity
+          {sortedKeywords.map((kwObj, idx) => {
+            const count = kwObj.other_count;
+            // Dynamic threshold logic:
+            // - Unique words (count == 0): Solid Highlight
+            // - Rare words (count <= 2): Light Highlight
+            // - Common words: Gray/Uncolored
+            
+            let sx = {
+              height: 20, 
+              fontSize: '0.7rem',
+            };
+
+            if (count === 0) {
+              // Unique -> Strong Color
+              sx = {
+                ...sx,
+                bgcolor: color,
+                color: '#ffffff',
+                border: `1px solid ${color}`,
+                fontWeight: 'bold'
+              };
+            } else if (count <= 4) {
+              // Rare -> Light Tint
+              sx = {
+                ...sx,
+                bgcolor: `${color}15`, // 15 = ~8% opacity
                 color: color,
                 border: `1px solid ${color}40`
-              }} 
-            />
-          ))}
+              };
+            } else {
+              // Common -> Gray
+              sx = {
+                ...sx,
+                bgcolor: '#f9fafb',
+                color: 'text.secondary',
+                border: '1px solid #e0e0e0'
+              };
+            }
+
+            return (
+              <Chip 
+                key={idx} 
+                label={`${kwObj.word} [${kwObj.other_count + 1}]`} 
+                size="small" 
+                sx={sx} 
+              />
+            );
+          })}
         </Box>
       </CardContent>
     </Card>

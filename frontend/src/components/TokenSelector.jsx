@@ -1,5 +1,4 @@
-import React from 'react';
-import { Box, Typography, CircularProgress } from '@mui/material';
+import { Box, CircularProgress, Typography } from '@mui/material';
 
 const TokenSelector = ({ caption, selectedToken, isProcessing, onTokenClick }) => {
   return (
@@ -14,9 +13,12 @@ const TokenSelector = ({ caption, selectedToken, isProcessing, onTokenClick }) =
           <Typography variant="overline" color="text.secondary" fontWeight="bold">
             Generated Caption
           </Typography>
-          {selectedToken && (
-             <Typography variant="caption" sx={{ bgcolor: 'primary.main', color: 'white', px: 1, borderRadius: 1 }}>
-               Token to analyze: {selectedToken}
+          {caption && (selectedToken ? 
+             <Typography variant="caption" sx={{ bgcolor: 'info.main', color: 'white', px: 1, borderRadius: 1 }}>
+               Target token: "{selectedToken}"
+             </Typography>
+          : <Typography variant="caption" sx={{ bgcolor: 'info.light', color: 'white', px: 1, borderRadius: 1 }}>
+               Select token to generate explanations
              </Typography>
           )}
        </Box>
@@ -36,7 +38,12 @@ const TokenSelector = ({ caption, selectedToken, isProcessing, onTokenClick }) =
               Upload image for captioning to begin...
             </Typography>
           ) : (
-            caption.split(' ').map((word, i) => (
+            caption
+              .replace(/[^\w\s]|_/g, '') // Remove punctuation
+              .replace(/\s+/g, " ") // Replace multiple spaces with one
+              .trim() // Remove leading/trailing spaces
+              .split(' ') // Split by single space
+              .map((word, i) => (
               <Typography
                 key={i}
                 onClick={() => onTokenClick(word)}
