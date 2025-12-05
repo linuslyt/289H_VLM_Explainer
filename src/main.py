@@ -10,8 +10,8 @@ from PIL import Image, UnidentifiedImageError
 import torch
 from typing import Union
 
-from acronim_server import new_event, get_uploaded_img_full_path
-from acronim_server.inference import caption_uploaded_img, get_hidden_state_for_input
+from acronim_server import new_event, get_uploaded_img_saved_path
+from acronim_server.inference import caption_uploaded_img, get_hidden_state_for_input, get_hidden_states_for_training_samples
 
 from helpers.utils import (get_most_free_gpu)
 
@@ -50,7 +50,7 @@ async def save_image(file: UploadFile = File(...)):
 
         # Save as JPG. Resizing etc. will be handled by LLaVA processor
         new_filename = f"{file.filename.split('.')[0]}.jpg"
-        save_path = get_uploaded_img_full_path(new_filename)
+        save_path = get_uploaded_img_saved_path(new_filename)
         image.save(save_path, "JPEG", exist_ok=True)
 
         return {
@@ -67,7 +67,7 @@ async def caption_image(uploaded_img_path: str):
     print(f"captioning image for {uploaded_img_path}")
     return StreamingResponse(caption_uploaded_img(uploaded_img_path), media_type="text/event-stream")
 
-async def importance_estimation_pipeline(uploaded_img_path: str, token_of_interest: str):
+async def importance_estimation_pipeline(uploaded_img_path: str, token_of_interest: str, sampled_subset_size: int):
     # Get hidden state for input instance wrt target token
     async for event_type, data in get_hidden_state_for_input(uploaded_img_path, token_of_interest):
         if event_type == "return":
@@ -75,14 +75,17 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
         else:
             yield new_event(event_type=event_type, data=data, passthrough=False)
 
-    print(uploaded_img_hidden_state)
-    # async for event_type, data in get_hidden_states_for_training_samples(token_of_interest):
-    #     if event_type == "return":
-    #         uploaded_img_hidden_state = data
-    #     else:
-    #         yield new_event(event_type=event_type, data=data, passthrough=False)
+    print(uploaded_img_hidden_state.keys())
+
+    # Get hidden states from training data samples that contain token of interest in ground truth caption
+    async for event_type, data in get_hidden_states_for_training_samples(token_of_interest, sampled_subset_size):
+        if event_type == "return":
+            relevant_samples_hidden_state = data
+        else:
+            yield new_event(event_type=event_type, data=data, passthrough=False)
     
-    # Get hidden states for training samples that contain target token in ground truth captions
+    print(relevant_samples_hidden_state.keys())
+#    Get hidden states for training samples that contain target token in ground truth captions
 
     # # Scores
     # await asyncio.sleep(0.5)
@@ -94,8 +97,8 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
     # yield new_event(event_type="scores", data=scores) # On frontend, retrieve with JSON.parse(event.data);
 
 @app.get("/importance-estimation")
-async def importance_estimation(uploaded_img_path: str, token_of_interest: str):
-    return StreamingResponse(importance_estimation_pipeline(uploaded_img_path, token_of_interest), media_type="text/event-stream")
+async def importance_estimation(uploaded_img_path: str, token_of_interest: str, sampled_subset_size: int = 5000):
+    return StreamingResponse(importance_estimation_pipeline(uploaded_img_path, token_of_interest, sampled_subset_size), media_type="text/event-stream")
 
 @app.get("/status")
 def get_status(): # Return server and CUDA status
