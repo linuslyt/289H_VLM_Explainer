@@ -46,6 +46,18 @@ const VisualizerColumn = ({ title, subtitle, data, type, color, bgColor, borderC
     };
   })
 
+  // Define color schemes
+  const COLOR_SCHEME = {
+    activations: {
+      pos: "#2196f3", // Blue
+      neg: "#ef5350"  // Red
+    },
+    importance: {
+      pos: "#4caf50", // Green
+      neg: "#ff9800"  // Orange
+    }
+  };
+
   return (
       <Box 
         flex={1} 
@@ -64,12 +76,12 @@ const VisualizerColumn = ({ title, subtitle, data, type, color, bgColor, borderC
         </Box>
         
         <Box px={2} pt={2} borderBottom="1px solid #eee" bgcolor="#f1f8ff">
-            <ConceptChart data={concept_chart_data} color={color} type={type} />
+            <ConceptChart data={concept_chart_data} color={color} type={type} color_scheme={COLOR_SCHEME}/>
         </Box>
 
         <Box flex={1} p={2} sx={{ overflowY: 'auto' }}>
           {concept_card_data.map((concept, idx) => (
-            <ConceptCard key={idx} concept={concept} type={type} />
+            <ConceptCard key={idx} concept={concept} type={type} color_scheme={COLOR_SCHEME}/>
           ))}
         </Box>
       </Box>
