@@ -20,3 +20,9 @@ from analysis import analyse_features
 from analysis.feature_decomposition import get_feature_matrix, project_representations
 
 # WIP: gradient and concept importance calculations
+def get_concept_scores(uploaded_img_filename):
+  # get saved hidden states, concept dictionary...
+  # compute h_recon
+  # calculate grads
+  # calculate importance scores
+  return

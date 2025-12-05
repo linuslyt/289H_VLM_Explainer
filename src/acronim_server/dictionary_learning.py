@@ -19,5 +19,10 @@ from save_features import inference
 from analysis import analyse_features
 from analysis.feature_decomposition import get_feature_matrix, project_representations
 
-
-# WIP: dictionary learning for concept
+def compute_concept_dict_for_token(uploaded_img_filename):
+  # get saved preprocessed instructions...
+  # perform inference and save hidden state... (load if )
+  # get hidden states from training samples in batches and save... (load if already found )
+  # learn concept dictionary and save (load if already found)
+  # yield concept activations first, process after
+  return

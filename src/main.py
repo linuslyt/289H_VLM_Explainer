@@ -10,8 +10,8 @@ from PIL import Image, UnidentifiedImageError
 import torch
 from typing import Union
 
-from acronim_server import new_event, get_uploaded_img_path
-from acronim_server.captioning import caption_uploaded_img
+from acronim_server import new_event, get_uploaded_img_full_path
+from acronim_server.inference import caption_uploaded_img, get_hidden_state_for_input
 
 from helpers.utils import (get_most_free_gpu)
 
@@ -50,7 +50,7 @@ async def save_image(file: UploadFile = File(...)):
 
         # Save as JPG. Resizing etc. will be handled by LLaVA processor
         new_filename = f"{file.filename.split('.')[0]}.jpg"
-        save_path = get_uploaded_img_path(new_filename)
+        save_path = get_uploaded_img_full_path(new_filename)
         image.save(save_path, "JPEG", exist_ok=True)
 
         return {
@@ -63,28 +63,30 @@ async def save_image(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/caption-image")
-async def caption_image(img_path: str):
-    print(f"captioning image for {img_path}")
-    return StreamingResponse(caption_uploaded_img(img_path), media_type="text/event-stream")
+async def caption_image(uploaded_img_path: str):
+    print(f"captioning image for {uploaded_img_path}")
+    return StreamingResponse(caption_uploaded_img(uploaded_img_path), media_type="text/event-stream")
 
-async def importance_estimation_piipeline():
-    await asyncio.sleep(0.5)
-    yield new_event(event_type="log", data="Performing dictionary learning...")
+async def importance_estimation_pipeline(uploaded_img_path: str, token_of_interest: str):
+    async for event_type, data in get_hidden_state_for_input(uploaded_img_path, token_of_interest):
+        if event_type == "return":
+            uploaded_img_hidden_state = data
+        else:
+            yield new_event(event_type=event_type, data=data, passthrough=False)
 
-    await asyncio.sleep(0.5)
-    yield new_event(event_type="log", data="Calculating concept importance...")
-
-    # Scores
-    await asyncio.sleep(0.5)
-    scores = {
-        "importance": [],
-        "activations": [],
-    }
-    yield new_event(event_type="scores", data=scores) # On frontend, retrieve with JSON.parse(event.data);
+    print(uploaded_img_hidden_state)
+    # # Scores
+    # await asyncio.sleep(0.5)
+    # scores = {
+    #     "importance": [],
+    #     "activations": [],
+    # }
+    # # yield activations before yielding importances
+    # yield new_event(event_type="scores", data=scores) # On frontend, retrieve with JSON.parse(event.data);
 
 @app.get("/importance-estimation")
-async def importance_estimation():
-    return StreamingResponse(importance_estimation_piipeline(), media_type="text/event-stream")
+async def importance_estimation(uploaded_img_path: str, token_of_interest: str):
+    return StreamingResponse(importance_estimation_pipeline(uploaded_img_path, token_of_interest), media_type="text/event-stream")
 
 @app.get("/status")
 def get_status(): # Return server and CUDA status
