@@ -286,7 +286,7 @@ async def get_hidden_states_for_training_samples(
             return
 
         start_time = time.perf_counter()
-        yield new_log_event(logger, f"Extracting hidden states for relevant training data samples with batch size {batch_size}...")
+        yield new_log_event(logger, f"Extracting hidden states for relevant training data samples for token={token_of_interest}, batch_size={batch_size}...")
         
         # Argument setup
         batch_inference_args = get_arguments({ # Should match save_features.sh

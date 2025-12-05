@@ -1,7 +1,6 @@
-import React from 'react';
 import { Box, Typography } from '@mui/material';
-import ConceptChart from './ConceptChart';
 import ConceptCard from './ConceptCard';
+import ConceptChart from './ConceptChart';
 
 const VisualizerColumn = ({ title, subtitle, data, type, color, bgColor, borderColor }) => {
   return (
@@ -18,7 +17,7 @@ const VisualizerColumn = ({ title, subtitle, data, type, color, bgColor, borderC
           <ConceptChart data={data} color={color} />
       </Box>
       <Box flex={1} p={2} sx={{ overflowY: 'auto' }}>
-        {data.map((concept, idx) => (
+        {[].map((concept, idx) => (
           <ConceptCard key={idx} concept={concept} type={type} />
         ))}
       </Box>

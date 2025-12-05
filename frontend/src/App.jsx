@@ -10,7 +10,6 @@ import ImageUploader from './components/ImageUploader';
 import LogConsole from './components/LogConsole';
 import TokenSelector from './components/TokenSelector';
 import Visualizations from './components/Visualizations';
-import { mockExplanationData } from './mockData'; // Import mock data
 
 // Create a dark/clean theme or keep default. 
 // Using default here but removing body margins via CssBaseline.
@@ -22,6 +21,7 @@ function App() {
   // --- STATE ---
   const [logs, setLogs] = useState([]);
   const [preview, setPreview] = useState(null);
+  const [uploadedImgPath, setUploadedImgPath] = useState(null);
   const [caption, setCaption] = useState(null);
   const [selectedToken, setSelectedToken] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -34,21 +34,7 @@ function App() {
     setLogs((prev) => [...prev, `[${time}] ${message}`]);
   };
 
-  // Handle Token Click (using mock data)
-  const handleTokenClick = (token) => {
-      setSelectedToken(token);
-      setIsExplaining(true);
-      setExplanationData(null);
-      
-      // Simulate API call with a delay
-      setTimeout(() => {
-          setExplanationData(mockExplanationData);
-          addLog("Backend: Mock explanation received.");
-          setIsExplaining(false);
-      }, 500); // Simulate network delay
-  };
-
-  // Image drag and drop handler (using mock data)
+  // Image drag and drop handler
   const onDrop = useCallback(async (acceptedFiles) => {
     const file = acceptedFiles[0];
     if (!file) return;
@@ -84,7 +70,8 @@ function App() {
       }
       const uploadResult = await uploadResponse.json();
       const serverFilePath = uploadResult.filename; // Adjust key based on your actual backend return
-
+      setUploadedImgPath(serverFilePath);
+      
       addLog(`Backend: Image received. Requesting caption for img=${serverFilePath}`);
 
       // /caption-image returns SSE stream. event_type="log" for logs, event_type="return" for returned caption.
@@ -92,21 +79,21 @@ function App() {
       const captionSource = new EventSource(captionUrl);
 
       captionSource.addEventListener("log", (e) => {
-        addLog(e.data);
+        addLog(`Backend: ${e.data}`);
         console.log(e.data);
       })
 
       captionSource.addEventListener("return", (e) => {
-          console.log("Caption generated")
-          addLog("Caption generated.")
+          console.log("System: Caption generated")
           setCaption(e.data);
           captionSource.close()
       })
 
       captionSource.onerror = (err) => {
-        console.error("Stream failed:", err);
+        console.error("Captioning stream failed:", err);
         captionSource.close(); // Close to stop retry loop
-        addLog("Error: Stream connection lost.");
+        addLog("Error: Stream connection lost during captioning.");
+        setIsProcessing(false);
       };
     } catch (e) {
       console.error(e);
@@ -115,6 +102,55 @@ function App() {
       setIsProcessing(false);
     }
   }, []);
+
+
+  // Token select handler
+  const handleTokenClick = useCallback(async (token) => {
+      setSelectedToken(token);
+      setIsExplaining(true);
+      setExplanationData(null);
+      
+      const baseExplainUrl = "http://localhost:8000/importance-estimation";
+
+      const params = new URLSearchParams({
+        uploaded_img_path: uploadedImgPath,
+        token_of_interest: token,
+        sampled_subset_size: 5000,
+        sampling_inference_batch_size: 20,
+        n_concepts: 10,
+        force_recompute: true // TODO: add button to toggle this. Also set to true if n_concepts or sampled_subset_size changes for the same token of interest.
+      });
+
+      const encodedExplainURL = `${baseExplainUrl}?${params.toString()}`;
+
+      try {
+        const explainSource = new EventSource(encodedExplainURL);
+
+        explainSource.addEventListener("log", (e) => {
+          addLog(`Backend: ${e.data}`);
+          console.log(e.data);
+        })
+
+        explainSource.addEventListener("return", (e) => {
+            console.log("System: Explanations generated")
+            setExplanationData(e.data);
+            explainSource.close()
+        })
+
+        explainSource.onerror = (err) => {
+          console.error("Stream failed:", err);
+          explainSource.close(); // Close to stop retry loop
+          addLog(`Backend: ERROR - ${err.data}`);
+          setIsExplaining(false);
+        };
+      } catch (e) {
+        console.error(e);
+        addLog(`Error: ${e.message}`);
+      } finally {
+        setIsExplaining(false);
+      }
+  }, [uploadedImgPath, selectedToken]);
+
 
   return (
     <ThemeProvider theme={theme}>
