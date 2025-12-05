@@ -7,6 +7,10 @@ UPLOADED_IMG_DIR = "./uploads"
 PREPROCESSED_INPUTS_DIR = "preprocessed_inputs"
 SAVED_HIDDEN_STATES_DIR = "features"
 SAVED_CONCEPT_DICTS_DIR = "concept_dicts"
+DATASET_NAME="coco"
+DICTIONARY_LEARNING_DATA_SPLIT="train"
+DICT_ANALYSIS_NAME="decompose_activations_text_grounding_image_grounding"
+
 os.makedirs(UPLOADED_IMG_DIR, exist_ok=True)
 os.makedirs(os.path.join(UPLOADED_IMG_DIR, PREPROCESSED_INPUTS_DIR), exist_ok=True)
 os.makedirs(os.path.join(UPLOADED_IMG_DIR, SAVED_HIDDEN_STATES_DIR), exist_ok=True)
@@ -43,7 +47,7 @@ def get_preprocessed_img_saved_path(uploaded_img_filename):
     img_name, _ = os.path.splitext(uploaded_img_filename)
     return os.path.join(get_preprocessed_img_dir(), f"{img_name}.pth")
 
-def get_output_hidden_state_paths(uploaded_img_path: Union[str, None], hook_name: str, token_of_interest: str) -> Tuple[str, str]:
+def get_output_hidden_state_paths(token_of_interest: str, uploaded_img_path: Union[str, None]=None, hook_name: str = "save_hidden_states_for_token_of_interest") -> Tuple[str, str]:
     if uploaded_img_path == None:
         img_name = "training_samples"
     else:
@@ -54,6 +58,8 @@ def get_output_hidden_state_paths(uploaded_img_path: Union[str, None], hook_name
     return hidden_state_filename, hidden_state_full_saved_path
 
 def get_output_concept_dictionary_path(token_of_interest):
-    concept_dict_filename = f"llava_concept_dict_{DATASET_NAME}_{DICTIONARY_LEARNING_DATA_SPLIT}_{TARGET_TOKEN}"
-    concept_dict_final_path = os.path.join(OUT_DIR, "concept_dicts", f"{DICT_ANALYSIS_NAME}_{concept_dict_filename}.pth")
+    concept_dict_filename = f"{DATASET_NAME}_{DICTIONARY_LEARNING_DATA_SPLIT}_{token_of_interest}_dict"
+    concept_dict_full_saved_path = os.path.join(get_saved_concept_dicts_dir(), f"{DICT_ANALYSIS_NAME}_{concept_dict_filename}.pth")
+    return concept_dict_filename, concept_dict_full_saved_path
+
 # TODO: methods to get filenames

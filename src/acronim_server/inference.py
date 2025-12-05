@@ -44,25 +44,23 @@ COCO_TRAIN_FULL_SIZE=82783 # full set is 82783
 DICTIONARY_LEARNING_MIN_SAMPLE_SIZE=5000
 NUM_CONCEPTS=20
 TARGET_IMAGE=""
-TARGET_TOKEN="motorcycle" # NOTE: some tokens will cause dictionary learning to fail, e.g. "dogs" for some reason. not entirely sure why.
 SEED=28
 OUT_DIR="/home/ytllam/xai/xl-vlms/out/gradient_concept"
-LOG_FILE=os.path.join(os.path.join(OUT_DIR, f"importance_estimation_{datetime.now().strftime('%m-%d-%Y_%H-%M-%S')}_{TARGET_TOKEN}.log"))
 DICT_ANALYSIS_NAME="decompose_activations_text_grounding_image_grounding"
 
 DEFAULT_CAPTIONING_ARGS = {
     "model_name_or_path": MODEL_NAME,
     "dataset_name": DATASET_NAME,
-    "dataset_size": DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, # should be overridden
+    "dataset_size": DICTIONARY_LEARNING_MIN_SAMPLE_SIZE,
     "data_dir": DATA_DIR,
     "annotation_file": ANNOTATION_FILE,
-    "split": "test", # should be overridden
+    "split": INFERENCE_DATA_SPLIT,
     "hook_names": HOOK_NAMES,
     "modules_to_hook": TARGET_FEATURE_MODULES,
     # used to filter dataset to images where the token of interest exists in caption.
     # we can set this to True so we only sample from those images for which we have a concept dictionary precomputed for.
     "select_token_of_interest_samples": True,
-    "token_of_interest": TARGET_TOKEN,
+    "token_of_interest": "", # override
     "save_dir": get_uploaded_img_dir(),
     "save_filename": "", # should be overridden
     "seed": SEED,
@@ -75,9 +73,11 @@ DEFAULT_CAPTIONING_ARGS = {
 
 FORCE_RECOMPUTE=False # TODO: make script argument
 
-logger = setup_logger(LOG_FILE)
 set_seed(SEED)
 device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
+
+LOG_FILE=os.path.join(os.path.join(OUT_DIR, f"acronim_{datetime.now().strftime('%m-%d-%Y_%H-%M-%S')}.log"))
+logger = setup_logger(LOG_FILE)
 
 default_model_args = get_arguments(DEFAULT_CAPTIONING_ARGS)
 llava_model_class = get_model_class(
@@ -91,7 +91,8 @@ model = llava_model_class.get_model()
 
 @torch.no_grad()
 def caption_uploaded_img(
-    uploaded_img_path: str
+    uploaded_img_path: str,
+    force_recompute: bool = True,
 ):
     start_time = time.perf_counter()
     # if preprocessed_input exists, load...
@@ -110,7 +111,7 @@ def caption_uploaded_img(
     # Run without hooks for first inference
     img_path = get_uploaded_img_saved_path(uploaded_img_path)
     preprocessed_img_path = get_preprocessed_img_saved_path(uploaded_img_path)
-    if os.path.exists(preprocessed_img_path):
+    if os.path.exists(preprocessed_img_path) and not force_recompute:
         yield new_log_event(logger, f"Loading preprocessed image from path={preprocessed_img_path}", passthrough=False)
         preprocessed_input = torch.load(preprocessed_img_path)
     else:
@@ -148,16 +149,15 @@ def caption_uploaded_img(
 async def get_hidden_state_for_input(
     uploaded_img_path: str,
     token_of_interest: str,
+    force_recompute: bool = True,
 ):
     start_time = time.perf_counter()
     # if preprocessed_input exists, load...
     # filename and full path it's saved to by hooks
-    hidden_state_filename, hidden_state_full_saved_path = get_output_hidden_state_paths(uploaded_img_path=uploaded_img_path, 
-                                                                                        hook_name=HOOK_NAMES[0], 
-                                                                                        token_of_interest=token_of_interest)
+    hidden_state_filename, hidden_state_full_saved_path = get_output_hidden_state_paths(uploaded_img_path=uploaded_img_path, token_of_interest=token_of_interest)
     
     # Load from cached if exists
-    if os.path.exists(hidden_state_full_saved_path):
+    if os.path.exists(hidden_state_full_saved_path) and not force_recompute:
         yield new_log_event(logger, f"Loaded hidden state for img={uploaded_img_path} wrt token={token_of_interest} from path={hidden_state_full_saved_path}'")
         cached_hidden_state = torch.load(hidden_state_full_saved_path)
         yield new_event(event_type="return", data=cached_hidden_state)
@@ -261,18 +261,18 @@ async def get_hidden_state_for_input(
 async def get_hidden_states_for_training_samples(
     token_of_interest: str,
     sampled_subset_size: int,
+    force_recompute: bool = True,
 ):
-    sampled_hidden_states_filename, sampled_hidden_states_full_saved_path = get_output_hidden_state_paths(uploaded_img_path=None,
-                                                                                        hook_name=HOOK_NAMES[0],
-                                                                                        token_of_interest=token_of_interest)
+    sampled_hidden_states_filename, sampled_hidden_states_full_saved_path = get_output_hidden_state_paths(token_of_interest=token_of_interest)
 
     # Load from cached if exists
-    if os.path.exists(sampled_hidden_states_full_saved_path):
+    if os.path.exists(sampled_hidden_states_full_saved_path) and not force_recompute:
         cached_hidden_states = torch.load(sampled_hidden_states_full_saved_path)
         yield new_log_event(logger, f"Loaded {len(cached_hidden_states['hidden_states'])} sampled hidden states for token={token_of_interest} from path={sampled_hidden_states_full_saved_path}'")
         yield new_event(event_type="return", data=cached_hidden_states)
         return
 
+    start_time = time.perf_counter()
     yield new_log_event(logger, f"Extracting hidden states for relevant training data samples...")
     
     # Argument setup
@@ -285,6 +285,7 @@ async def get_hidden_states_for_training_samples(
         "save_filename": sampled_hidden_states_filename,
         "batch_size": 26,
         "programmatic": True,
+        "token_of_interest": token_of_interest,
     })
 
     # Inference

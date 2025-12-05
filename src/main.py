@@ -12,6 +12,7 @@ from typing import Union
 
 from acronim_server import new_event, get_uploaded_img_saved_path
 from acronim_server.inference import caption_uploaded_img, get_hidden_state_for_input, get_hidden_states_for_training_samples
+from acronim_server.dictionary_learning import learn_concept_dictionary_for_token
 
 from helpers.utils import (get_most_free_gpu)
 
@@ -85,7 +86,15 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
             yield new_event(event_type=event_type, data=data, passthrough=False)
     
     print(relevant_samples_hidden_state.keys())
-#    Get hidden states for training samples that contain target token in ground truth captions
+
+    # Learn concept dictionary
+    async for event_type, data in learn_concept_dictionary_for_token(token_of_interest):
+        if event_type == "return":
+            concept_dict_for_token = data
+        else:
+            yield new_event(event_type=event_type, data=data, passthrough=False)
+    
+    print(concept_dict_for_token.keys())
 
     # # Scores
     # await asyncio.sleep(0.5)
