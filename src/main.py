@@ -2,6 +2,7 @@ import asyncio
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 import io
 import json
 import os
@@ -10,7 +11,7 @@ from PIL import Image, UnidentifiedImageError
 import torch
 from typing import Union
 
-from acronim_server import new_event, get_uploaded_img_saved_path
+from acronim_server import new_event, get_uploaded_img_saved_path, get_grounding_image_dir
 from acronim_server.inference import (caption_uploaded_img, get_hidden_state_for_input, get_hidden_states_for_training_samples, 
                                       DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, COCO_TRAIN_FULL_SIZE)
 from acronim_server.dictionary_learning import learn_concept_dictionary_for_token
@@ -110,15 +111,18 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
         else:
             yield new_event(event_type=event_type, data=data, passthrough=False)
 
+    # Unprocessed result format:
     # {
     #     "activations": concept_activations,
     #     "importance_scores": concept_importance_scores,
     #     "indices_by_importance": indices_by_importance,
     #     "indices_by_activations": indices_by_activations,
     #     "text_groundings": concept_dict['text_grounding'],
-    #     "image_grounding_paths": concept_dict['image_grounding_paths'],
+    #     "image_grounding_paths": concept_dict['image_grounding_paths'], # stripped of directory name below before returning
     # }
-    # TODO: maybe strip image_grounding_paths to just filename, depending on how we mount the image folder
+
+    print(results)
+    results["image_grounding_paths"] = [[os.path.basename(img_path) for img_path in grounding_list] for grounding_list in results["image_grounding_paths"]]
     yield new_event(event_type="scores", data=results, passthrough=False)
     return
 
@@ -128,7 +132,8 @@ async def importance_estimation(uploaded_img_path: str, token_of_interest: str,
                                 force_recompute: bool = False):
     return StreamingResponse(importance_estimation_pipeline(uploaded_img_path, token_of_interest, sampled_subset_size, n_concepts, force_recompute), media_type="text/event-stream")
 
-# TODO: endpoint to retrieve images by path
+# Gronuding images can be retrieved by filename - e.g. http://localhost:8000/grounding-images/COCO_train2014_000000095381.jpg
+app.mount("/grounding-images", StaticFiles(directory=get_grounding_image_dir()), name="grounding-images")
 
 @app.get("/status")
 def get_status(): # Return server and CUDA status

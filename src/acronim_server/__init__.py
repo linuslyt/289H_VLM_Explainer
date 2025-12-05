@@ -17,6 +17,7 @@ SAVED_CONCEPT_DICTS_DIR = "concept_dicts"
 DATASET_NAME="coco"
 DICTIONARY_LEARNING_DATA_SPLIT="train"
 DICT_ANALYSIS_NAME="decompose_activations_text_grounding_image_grounding"
+GROUNDING_IMG_DIR="/media/data/ytllam/coco/train2014"
 
 os.makedirs(UPLOADED_IMG_DIR, exist_ok=True)
 os.makedirs(os.path.join(UPLOADED_IMG_DIR, PREPROCESSED_INPUTS_DIR), exist_ok=True)
@@ -108,6 +109,9 @@ def new_event(event_type: str, data: Union[str, dict], passthrough=True):
 def new_log_event(logger, msg: str, passthrough=True):
     logger.info(msg)
     return new_event(event_type="log", data=msg, passthrough=passthrough)
+
+def get_grounding_image_dir():
+    return GROUNDING_IMG_DIR
 
 def get_uploaded_img_dir():
     return UPLOADED_IMG_DIR
