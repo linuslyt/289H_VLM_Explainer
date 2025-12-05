@@ -138,7 +138,7 @@ def caption_uploaded_img(
     elapsed_time = end_time - start_time
 
     yield new_log_event(logger, f"Generated caption for img={uploaded_img_path} in time={elapsed_time:.6f}s: '{output_caption}'", passthrough=False)
-    yield new_event(event_type="caption", data=output_caption[0], passthrough=False)
+    yield new_event(event_type="return", data=output_caption[0], passthrough=False)
 
 @torch.no_grad()
 async def get_hidden_state_for_input(

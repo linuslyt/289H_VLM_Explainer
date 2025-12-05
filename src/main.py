@@ -123,7 +123,7 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
 
     print(results)
     results["image_grounding_paths"] = [[os.path.basename(img_path) for img_path in grounding_list] for grounding_list in results["image_grounding_paths"]]
-    yield new_event(event_type="scores", data=results, passthrough=False)
+    yield new_event(event_type="return", data=results, passthrough=False)
     return
 
 @app.get("/importance-estimation")
