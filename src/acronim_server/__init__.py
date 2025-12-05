@@ -142,5 +142,3 @@ def get_output_concept_dictionary_path(token_of_interest):
     concept_dict_filename = f"{DATASET_NAME}_{DICTIONARY_LEARNING_DATA_SPLIT}_{token_of_interest}_dict"
     concept_dict_full_saved_path = os.path.join(get_saved_concept_dicts_dir(), f"{DICT_ANALYSIS_NAME}_{concept_dict_filename}.pth")
     return concept_dict_filename, concept_dict_full_saved_path
-
-# TODO: methods to get filenames

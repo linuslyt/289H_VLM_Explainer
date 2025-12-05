@@ -44,34 +44,11 @@ INFERENCE_SUBSET_SIZE=5000
 DICTIONARY_LEARNING_DATA_SPLIT="train"
 COCO_TRAIN_FULL_SIZE=82783 # full set is 82783
 DICTIONARY_LEARNING_MIN_SAMPLE_SIZE=5000
-NUM_CONCEPTS=20
+DEFAULT_NUM_CONCEPTS=20
 TARGET_IMAGE=""
 SEED=28
 OUT_DIR="/home/ytllam/xai/xl-vlms/out/gradient_concept"
 DICT_ANALYSIS_NAME="decompose_activations_text_grounding_image_grounding"
-
-DEFAULT_CAPTIONING_ARGS = {
-    "model_name_or_path": MODEL_NAME,
-    "dataset_name": DATASET_NAME,
-    "dataset_size": DICTIONARY_LEARNING_MIN_SAMPLE_SIZE,
-    "data_dir": DATA_DIR,
-    "annotation_file": ANNOTATION_FILE,
-    "split": INFERENCE_DATA_SPLIT,
-    "hook_names": HOOK_NAMES,
-    "modules_to_hook": TARGET_FEATURE_MODULES,
-    # used to filter dataset to images where the token of interest exists in caption.
-    # we can set this to True so we only sample from those images for which we have a concept dictionary precomputed for.
-    "select_token_of_interest_samples": True,
-    "token_of_interest": "", # override
-    "save_dir": get_uploaded_img_dir(),
-    "save_filename": "", # should be overridden
-    "seed": SEED,
-    "processor_name": MODEL_NAME,
-    "generation_mode": True,
-    "exact_match_modules_to_hook": True,
-    "save_only_generated_tokens": True,
-    "batch_size": 1,
-}
 
 set_seed(SEED)
 device = get_most_free_gpu() if torch.cuda.is_available() else torch.device("cpu")
@@ -94,7 +71,7 @@ def get_concept_grad_at_target_token_step(
     concept_matrix, # shape: [N_concepts, Hidden_Dim] (e.g., [20, 4096])
 ):
     # free up concept dict model for extra vram
-    del get_dict_model_class().model_
+    # del get_dict_model_class().model_
 
     # model = model_class.get_model()
     layer_name = "language_model.model.layers.31"
@@ -171,7 +148,8 @@ def get_concept_grad_at_target_token_step(
     hook_handle.remove()
     return grad_wrt_concepts
 
-async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_state_path, uploaded_img_hidden_state, concept_dict, force_recompute: bool=FORCE_RECOMPUTE):
+async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_state_path, uploaded_img_hidden_state, concept_dict,
+                                       n_concepts: int=DEFAULT_NUM_CONCEPTS, force_recompute: bool=FORCE_RECOMPUTE):
     start_time = time.perf_counter()
     yield new_log_event(logger, f"Calculating concept importance...")
 
@@ -234,8 +212,8 @@ async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_st
     logger.info(f"Importance scores: {concept_importance_scores}")
     logger.info(f"Activations: {concept_activations}")
 
-    sorted_activations, indices_by_activations = torch.topk(concept_activations, k=NUM_CONCEPTS)
-    sorted_importance_scores, indices_by_importance = torch.topk(concept_importance_scores, k=NUM_CONCEPTS)
+    sorted_activations, indices_by_activations = torch.topk(concept_activations, k=n_concepts)
+    sorted_importance_scores, indices_by_importance = torch.topk(concept_importance_scores, k=n_concepts)
     
     logger.info(f"Sorted importance scores: {sorted_importance_scores}, indices={indices_by_importance}")
     logger.info(f"Sorted activations: {sorted_activations}, indices={indices_by_activations}")

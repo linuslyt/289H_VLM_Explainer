@@ -11,7 +11,8 @@ import torch
 from typing import Union
 
 from acronim_server import new_event, get_uploaded_img_saved_path
-from acronim_server.inference import caption_uploaded_img, get_hidden_state_for_input, get_hidden_states_for_training_samples
+from acronim_server.inference import (caption_uploaded_img, get_hidden_state_for_input, get_hidden_states_for_training_samples, 
+                                      DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, COCO_TRAIN_FULL_SIZE)
 from acronim_server.dictionary_learning import learn_concept_dictionary_for_token
 from acronim_server.concept_importance import calculate_concept_importance
 
@@ -22,7 +23,7 @@ app = FastAPI()
 # CORS configuration
 origins = [
     "http://localhost",
-    "http://localhost:3000",  # TODO: update for frontend port
+    "http://localhost:5173",  # Vite port
     "http://localhost:8080",
     # Use "*" only for dev/internal tools to allow ALL connections
     # "*"
@@ -69,9 +70,13 @@ async def caption_image(uploaded_img_path: str):
     print(f"captioning image for {uploaded_img_path}")
     return StreamingResponse(caption_uploaded_img(uploaded_img_path), media_type="text/event-stream")
 
-async def importance_estimation_pipeline(uploaded_img_path: str, token_of_interest: str, sampled_subset_size: int):
+async def importance_estimation_pipeline(uploaded_img_path: str, token_of_interest: str, sampled_subset_size: int, n_concepts: int, force_recompute: bool):
+    # Clamp sampled subset
+    sampled_subset_size = max(DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, min(sampled_subset_size, COCO_TRAIN_FULL_SIZE))
+    yield new_event(event_type="log", data=f"Clamping sampled_subset_size to {sampled_subset_size}.", passthrough=False)
+
     # Get hidden state for input instance wrt target token
-    async for event_type, data in get_hidden_state_for_input(uploaded_img_path, token_of_interest):
+    async for event_type, data in get_hidden_state_for_input(uploaded_img_path, token_of_interest, force_recompute):
         if event_type == "return":
             print("retdata:", data)
             uploaded_img_hidden_state_path, uploaded_img_hidden_state = data
@@ -81,7 +86,7 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
     print("here2:", uploaded_img_hidden_state_path)
 
     # Get hidden states from training data samples that contain token of interest in ground truth caption
-    async for event_type, data in get_hidden_states_for_training_samples(token_of_interest, sampled_subset_size):
+    async for event_type, data in get_hidden_states_for_training_samples(token_of_interest, sampled_subset_size, force_recompute):
         if event_type == "return":
             relevant_samples_hidden_state = data
         else:
@@ -90,7 +95,7 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
     print(relevant_samples_hidden_state.keys())
 
     # Learn concept dictionary
-    async for event_type, data in learn_concept_dictionary_for_token(token_of_interest, sampled_subset_size):
+    async for event_type, data in learn_concept_dictionary_for_token(token_of_interest, sampled_subset_size, n_concepts, force_recompute):
         if event_type == "return":
             concept_dict_for_token = data
         else:
@@ -99,7 +104,7 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
     print(concept_dict_for_token.keys())
 
     # Calculate concept importance
-    async for event_type, data in calculate_concept_importance(token_of_interest, uploaded_img_hidden_state_path, uploaded_img_hidden_state, concept_dict_for_token):
+    async for event_type, data in calculate_concept_importance(token_of_interest, uploaded_img_hidden_state_path, uploaded_img_hidden_state, concept_dict_for_token, n_concepts, force_recompute):
         if event_type == "return":
             results = data
         else:
@@ -113,12 +118,17 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
     #     "text_groundings": concept_dict['text_grounding'],
     #     "image_grounding_paths": concept_dict['image_grounding_paths'],
     # }
+    # TODO: maybe strip image_grounding_paths to just filename, depending on how we mount the image folder
     yield new_event(event_type="scores", data=results, passthrough=False)
     return
 
 @app.get("/importance-estimation")
-async def importance_estimation(uploaded_img_path: str, token_of_interest: str, sampled_subset_size: int = 5000):
-    return StreamingResponse(importance_estimation_pipeline(uploaded_img_path, token_of_interest, sampled_subset_size), media_type="text/event-stream")
+async def importance_estimation(uploaded_img_path: str, token_of_interest: str, 
+                                sampled_subset_size: int = 5000, n_concepts: int = 10,
+                                force_recompute: bool = False):
+    return StreamingResponse(importance_estimation_pipeline(uploaded_img_path, token_of_interest, sampled_subset_size, n_concepts, force_recompute), media_type="text/event-stream")
+
+# TODO: endpoint to retrieve images by path
 
 @app.get("/status")
 def get_status(): # Return server and CUDA status

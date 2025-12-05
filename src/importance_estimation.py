@@ -1,3 +1,8 @@
+"""
+Standalone script for testing concept importance estimation pipeline.
+API server version is located in the acronim_server module.
+"""
+
 import argparse
 import os
 from datetime import datetime

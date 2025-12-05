@@ -272,8 +272,6 @@ async def get_hidden_states_for_training_samples(
     yield new_log_event(logger, f"Extracting hidden states for relevant training data samples...")
     
     # Argument setup
-    sampled_subset_size = max(DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, min(sampled_subset_size, COCO_TRAIN_FULL_SIZE))
-
     batch_inference_args = get_arguments({ # Should match save_features.sh
         **DEFAULT_CAPTIONING_ARGS,
         "dataset_size": sampled_subset_size,
@@ -318,6 +316,6 @@ async def get_hidden_states_for_training_samples(
     end_time = time.perf_counter()
     elapsed_time = end_time - start_time
 
-    yield new_log_event(logger, f"Extracted hidden states for relevant samples wrt token={token_of_interest} in time={elapsed_time:.6f}s'")
     yield new_log_event(logger, f"Saved hidden state for relevant images to {sampled_hidden_states_full_saved_path}")
+    yield new_log_event(logger, f"Extracted hidden states for relevant samples wrt token={token_of_interest} in time={elapsed_time:.6f}s'")
     yield new_event(event_type="return", data=hook_data)
