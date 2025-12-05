@@ -1,6 +1,7 @@
-import React from 'react';
-import { Box, Typography, CircularProgress } from '@mui/material';
+import { Box, CircularProgress, Typography } from '@mui/material';
 import VisualizerColumn from './VisualizerColumn';
+
+// TODO: stack columns if screen width too small
 
 const Visualizations = ({ selectedToken, isExplaining, explanationData }) => {
   return (

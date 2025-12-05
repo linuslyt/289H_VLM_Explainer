@@ -3,20 +3,20 @@ import {
   CssBaseline,
   Divider,
   ThemeProvider,
-  Typography,
-  createTheme,
-  CircularProgress
+  createTheme
 } from '@mui/material';
 import { useCallback, useState } from 'react';
-import { mockExplanationData } from './mockData'; // Import mock data
 import ImageUploader from './components/ImageUploader';
-import TokenSelector from './components/TokenSelector';
 import LogConsole from './components/LogConsole';
+import TokenSelector from './components/TokenSelector';
 import Visualizations from './components/Visualizations';
+import { mockExplanationData } from './mockData'; // Import mock data
 
 // Create a dark/clean theme or keep default. 
 // Using default here but removing body margins via CssBaseline.
 const theme = createTheme();
+
+// TODO: initialize log with server /status response. disable upload until server online
 
 function App() {
   // --- STATE ---
@@ -65,18 +65,55 @@ function App() {
     setIsProcessing(true);
     addLog(`System: File loaded - ${file.name}`);
 
-    // mock backend logs
-    addLog("Network: Uploading image to server...");
-    
-    setTimeout(() => addLog("Backend: Image received. Resizing..."), 800);
-    setTimeout(() => addLog("Backend: Loading inference model (ViT-GPT2)..."), 1800);
-    setTimeout(() => addLog("Backend: Generating attention masks..."), 3000);
-    setTimeout(()=> {
-      addLog("Backend: Success. Caption generated.");
-      setCaption("a large brown dog running through green grass");
-        setIsProcessing(false);
-    }, 1000); // Simulate network delay
+    try {
+      addLog(`Network: Uploading image ${file.name} to server...`);
 
+      // We must use FormData to send files via POST
+      const formData = new FormData();
+      // 'file' here must match the parameter name in FastAPI: def save_image(file: ...)
+      formData.append("file", file); 
+
+      const uploadResponse = await fetch("http://localhost:8000/upload/", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!uploadResponse.ok) {
+        addLog(`Network: failed to upload ${file.name}. Please retry.`);
+        throw new Error(`Upload failed: ${uploadResponse.statusText}`);
+      }
+      const uploadResult = await uploadResponse.json();
+      const serverFilePath = uploadResult.filename; // Adjust key based on your actual backend return
+
+      addLog(`Backend: Image received. Requesting caption for img=${serverFilePath}`);
+
+      // /caption-image returns SSE stream. event_type="log" for logs, event_type="return" for returned caption.
+      const captionUrl = `http://localhost:8000/caption-image?uploaded_img_path=${encodeURIComponent(serverFilePath)}`;
+      const captionSource = new EventSource(captionUrl);
+
+      captionSource.addEventListener("log", (e) => {
+        addLog(e.data);
+        console.log(e.data);
+      })
+
+      captionSource.addEventListener("return", (e) => {
+          console.log("Caption generated")
+          addLog("Caption generated.")
+          setCaption(e.data);
+          captionSource.close()
+      })
+
+      captionSource.onerror = (err) => {
+        console.error("Stream failed:", err);
+        captionSource.close(); // Close to stop retry loop
+        addLog("Error: Stream connection lost.");
+      };
+    } catch (e) {
+      console.error(e);
+      addLog(`Error: ${e.message}`);
+    } finally {
+      setIsProcessing(false);
+    }
   }, []);
 
   return (

@@ -1,5 +1,4 @@
-import React from 'react';
-import { Box, Typography, CircularProgress } from '@mui/material';
+import { Box, CircularProgress, Typography } from '@mui/material';
 
 const TokenSelector = ({ caption, selectedToken, isProcessing, onTokenClick }) => {
   return (
@@ -36,7 +35,13 @@ const TokenSelector = ({ caption, selectedToken, isProcessing, onTokenClick }) =
               Upload image for captioning to begin...
             </Typography>
           ) : (
-            caption.split(' ').map((word, i) => (
+            // remove punctuation then split by 
+            caption
+              .replace(/[^\w\s]|_/g, '') // Remove punctuation
+              .replace(/\s+/g, " ") // Replace multiple spaces with one
+              .trim() // Remove leading/trailing spaces
+              .split(' ') // Split by single space
+              .map((word, i) => (
               <Typography
                 key={i}
                 onClick={() => onTokenClick(word)}

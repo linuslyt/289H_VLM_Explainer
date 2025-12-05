@@ -19,6 +19,8 @@ from acronim_server.concept_importance import calculate_concept_importance
 
 from helpers.utils import (get_most_free_gpu)
 
+# TODO: type checking with pydantic
+
 app = FastAPI()
 
 # CORS configuration
