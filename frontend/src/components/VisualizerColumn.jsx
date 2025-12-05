@@ -1,5 +1,6 @@
 import { Box, Typography } from '@mui/material';
 import isEmpty from 'lodash/isEmpty';
+import { useRef } from 'react';
 import ConceptCard from './ConceptCard';
 import ConceptChart from './ConceptChart';
 
@@ -25,6 +26,10 @@ import ConceptChart from './ConceptChart';
 //   concept_id: concept index in dictionary + 1,
 // }
 const VisualizerColumn = ({ title, subtitle, data, type, color, bgColor, borderColor }) => {
+  // Store refs to card elements: refs.current[concept_id] = DOMNode
+  // Clicking on bar will scroll to card
+  const cardRefs = useRef({});
+
   // element of data.concept_order = concept index in dictionary
   // index of data.concept_order = order of concept by score
   if (isEmpty(data)) return;
@@ -58,6 +63,25 @@ const VisualizerColumn = ({ title, subtitle, data, type, color, bgColor, borderC
     }
   };
 
+  // Scroll Handler
+  const handleBarClick = (conceptId) => {
+    const element = cardRefs.current[conceptId];
+    if (element) {
+      element.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'start' // Aligns top of card to top of scroll area
+      });
+      
+      // Add a temporary highlight effect
+      element.style.transition = "background-color 0.5s";
+      const originalBg = element.style.backgroundColor;
+      element.style.backgroundColor = "#fffde7"; // Light yellow highlight
+      setTimeout(() => {
+        element.style.backgroundColor = originalBg;
+      }, 1000);
+    }
+  };
+
   return (
       <Box 
         flex={1} 
@@ -76,12 +100,25 @@ const VisualizerColumn = ({ title, subtitle, data, type, color, bgColor, borderC
         </Box>
         
         <Box px={2} pt={2} borderBottom="1px solid #eee" bgcolor="#f1f8ff">
-            <ConceptChart data={concept_chart_data} color={color} type={type} color_scheme={COLOR_SCHEME}/>
+            <ConceptChart 
+              data={concept_chart_data} 
+              color={color} 
+              type={type} 
+              color_scheme={COLOR_SCHEME}
+              onBarClick={handleBarClick} 
+            />
         </Box>
 
         <Box flex={1} p={2} sx={{ overflowY: 'auto' }}>
           {concept_card_data.map((concept, idx) => (
-            <ConceptCard key={idx} concept={concept} type={type} color_scheme={COLOR_SCHEME}/>
+            <ConceptCard 
+              key={idx} 
+              concept={concept} 
+              type={type} 
+              color_scheme={COLOR_SCHEME}
+              // Register the ref for this specific concept ID
+              domRef={(el) => (cardRefs.current[concept.concept_id] = el)}
+            />
           ))}
         </Box>
       </Box>

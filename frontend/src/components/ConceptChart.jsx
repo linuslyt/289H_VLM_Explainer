@@ -2,7 +2,7 @@ import { Box, Typography } from '@mui/material';
 import * as d3 from 'd3';
 import { useEffect, useRef } from 'react';
 
-const ConceptChart = ({ data, type = "activations", color_scheme }) => {
+const ConceptChart = ({ data, type = "activations", color_scheme, onBarClick }) => {
   const svgRef = useRef(null);
 
   useEffect(() => {
@@ -112,11 +112,20 @@ const ConceptChart = ({ data, type = "activations", color_scheme }) => {
       .attr("height", d => Math.abs(y(d.score) - y0))
       // Logic for Color
       .attr("fill", d => d.score >= 0 ? colors.pos : colors.neg)
+      
+      // --- INTERACTION ---
+      .style("cursor", "pointer") // Visual feedback
+      .on("click", (event, d) => {
+        if (onBarClick) {
+          onBarClick(d.concept_id);
+        }
+      })
+      
       // Tooltip logic
       .append("title")
       .text(d => `Concept ${d.concept_id}: ${d.score.toFixed(6)}`);
 
-  }, [data, type]);
+  }, [data, type, onBarClick]);
 
   return (
     <Box sx={{ width: '100%', height: '200px', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>

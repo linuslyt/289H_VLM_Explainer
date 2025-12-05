@@ -1,7 +1,7 @@
 import { Box, Card, CardContent, Chip, Stack, Typography } from '@mui/material';
 import ConceptBar from './ConceptBar';
 
-const ConceptCard = ({ concept, type, maxScore = 1, color_scheme}) => {
+const ConceptCard = ({ concept, type, maxScore = 1, color_scheme, domRef }) => {
   // 1. Determine Color based on type and score sign
   const scheme = color_scheme[type] || color_scheme.activations;
   const color = concept.score >= 0 ? scheme.pos : scheme.neg;
@@ -10,7 +10,18 @@ const ConceptCard = ({ concept, type, maxScore = 1, color_scheme}) => {
   const label = type === 'importance' ? 'Impt' : 'Actv';
 
   return (
-    <Card variant="outlined" sx={{ mb: 2, borderRadius: 2, borderColor: '#eeeeee' }}>
+    <Card 
+      ref={domRef} // <--- Attach DOM ref here for scrolling
+      variant="outlined" 
+      sx={{ 
+        mb: 2, 
+        borderRadius: 2, 
+        borderColor: '#eeeeee', 
+        // scrollMarginTop ensures the card doesn't get hidden behind 
+        // any fixed headers when scrolled into view
+        scrollMarginTop: '10px' 
+      }}
+    >
       <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
         
         {/* Header: ID and Bar */}
