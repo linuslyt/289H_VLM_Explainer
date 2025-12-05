@@ -83,24 +83,13 @@ llava_model_class = get_model_class(
 model = llava_model_class.get_model()
 logger.info(f"Loading model={MODEL_NAME} on device={device}, gpu={torch.cuda.is_available()}...")
 
-model_setup_args = get_arguments({
-    **DEFAULT_ARGS,
-})
-llava_model_class = get_model_class(
-    model_name_or_path=MODEL_NAME,
-    processor_name=MODEL_NAME,
-    device=device,
-    logger=logger,
-    args=model_setup_args, # larger arg dict not needed for model setup
-)
-
 dict_learning_device = torch.device("cpu")
 dict_learning_model_class = get_model_class(
     model_name_or_path=MODEL_NAME,
     processor_name=MODEL_NAME,
     device=dict_learning_device,
     logger=logger,
-    args=model_setup_args,
+    args=default_model_args,
 )
 
 def get_llava_model_class():

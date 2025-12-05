@@ -80,7 +80,7 @@ DEFAULT_LEARNING_ARGS = {
     "decomposition_method": "snmf",
 }
 
-FORCE_RECOMPUTE=True
+FORCE_RECOMPUTE=False
 
 set_seed(SEED)
 

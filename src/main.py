@@ -101,11 +101,20 @@ async def importance_estimation_pipeline(uploaded_img_path: str, token_of_intere
     # Calculate concept importance
     async for event_type, data in calculate_concept_importance(token_of_interest, uploaded_img_hidden_state_path, uploaded_img_hidden_state, concept_dict_for_token):
         if event_type == "return":
-            importance_scores = data
+            results = data
         else:
             yield new_event(event_type=event_type, data=data, passthrough=False)
-    
-    # yield new_event(event_type="scores", data=scores) # On frontend, retrieve with JSON.parse(event.data);
+
+    # {
+    #     "activations": concept_activations,
+    #     "importance_scores": concept_importance_scores,
+    #     "indices_by_importance": indices_by_importance,
+    #     "indices_by_activations": indices_by_activations,
+    #     "text_groundings": concept_dict['text_grounding'],
+    #     "image_grounding_paths": concept_dict['image_grounding_paths'],
+    # }
+    yield new_event(event_type="scores", data=results, passthrough=False)
+    return
 
 @app.get("/importance-estimation")
 async def importance_estimation(uploaded_img_path: str, token_of_interest: str, sampled_subset_size: int = 5000):

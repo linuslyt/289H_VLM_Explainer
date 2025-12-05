@@ -22,7 +22,7 @@ from acronim_server import (get_output_hidden_state_paths, get_uploaded_img_save
                             get_uploaded_img_dir, get_saved_hidden_states_dir,
                             get_output_concept_dictionary_path,
                             get_saved_concept_dicts_dir,
-                            get_llava_model_class,
+                            get_llava_model_class, get_dict_model_class,
                             new_log_event, new_event, CAPTIONING_PROMPT)
 import time
 
@@ -82,6 +82,8 @@ logger = setup_logger(LOG_FILE)
 llava_model_class = get_llava_model_class()
 model = llava_model_class.get_model()
 
+FORCE_RECOMPUTE=False
+
 def get_concept_grad_at_target_token_step(
     model_class,
     test_item, # saved from single_inference()
@@ -91,6 +93,9 @@ def get_concept_grad_at_target_token_step(
     target_id, # vocabulary index of target token. should be from get_vocab_idx_of_target_token()
     concept_matrix, # shape: [N_concepts, Hidden_Dim] (e.g., [20, 4096])
 ):
+    # free up concept dict model for extra vram
+    del get_dict_model_class().model_
+
     # model = model_class.get_model()
     layer_name = "language_model.model.layers.31"
     target_layer = get_module_by_path(model, layer_name)
@@ -156,7 +161,7 @@ def get_concept_grad_at_target_token_step(
 
     # Compute Gradient w.r.t Concept Activations
     concept_matrix = concept_matrix.to(device=model.device, dtype=grad_wrt_input.dtype) # ensure it's on the same device/dtype=fp16
-    grad_wrt_concepts = grad_wrt_input @ concept_matrix.T  # TODO: check if need transpose
+    grad_wrt_concepts = grad_wrt_input @ concept_matrix.T
     # grads shape: [1, 4096]
     # concept_matrix.T shape: [4096, 20]
     # result shape: [1, 20]
@@ -166,32 +171,27 @@ def get_concept_grad_at_target_token_step(
     hook_handle.remove()
     return grad_wrt_concepts
 
-async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_state_path, uploaded_img_hidden_state, concept_dict, force_recompute: bool=True):
+async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_state_path, uploaded_img_hidden_state, concept_dict, force_recompute: bool=FORCE_RECOMPUTE):
     start_time = time.perf_counter()
     yield new_log_event(logger, f"Calculating concept importance...")
-    print("tok:", token_of_interest)
 
-    # logger.info(f"Projecting test instance hidden representation w/r/t selected token onto concept dict...")
+    yield new_log_event(logger, f"Projecting input image hidden representation w/r/t selected token onto concept dict...")
     # # From concept_grounding_visualization.ipynb example
     data = torch.load(uploaded_img_hidden_state_path, map_location="cpu")
-    print(data)
     test_item = uploaded_img_hidden_state
     feat = get_feature_matrix(data["hidden_states"], module_name="language_model.model.layers.31", token_idx=None)
-    print(feat)
+
     projections = project_representations(
         sample=feat,
         analysis_model=concept_dict["analysis_model"],
         decomposition_type=concept_dict["decomposition_method"],
     )
-    # # With 1 input sample, we should get (1, n_concepts=20), (1, feature_dims), and 1 respectively
-    print(projections.shape, feat.shape, len(data["hidden_states"]))
-    print(projections)
 
-    # # TODO: refactor into reconstruct_differentiable_hidden_state()
+    yield new_log_event(logger, f"Calculating gradients...")
     target_token_vocab_idx = get_vocab_idx_of_target_token(token_of_interest,
-                                                           args_token_of_interest_idx=None, # TODO: check what this is
+                                                           args_token_of_interest_idx=None,
                                                            tokenizer=llava_model_class.get_tokenizer())
-    print(f"model_predictions: '{test_item.get('model_predictions')[0]}'")
+    # print(f"model_predictions: '{test_item.get('model_predictions')[0]}'")
 
     target_token_first_idx_in_entire_output, no_token_found_mask = get_first_pos_of_token_of_interest(
         tokens=test_item.get("hidden_states")[0].get("language_model.model.layers.31")[0],
@@ -203,16 +203,14 @@ async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_st
     n_prompt_tokens = n_total_tokens - n_caption_tokens
     target_token_first_idx_in_caption_output = target_token_first_idx_in_entire_output - n_prompt_tokens
 
-    print(f"vocab_idx={target_token_vocab_idx}")
-    print(f"target_token_first_idx_in_caption_output={target_token_first_idx_in_caption_output}")
-    # exit()
+    # print(f"vocab_idx={target_token_vocab_idx}")
+    # print(f"target_token_first_idx_in_caption_output={target_token_first_idx_in_caption_output}")
 
     target_dtype = concept_dict["concepts"].dtype
     v_X = torch.tensor(projections).to(dtype=target_dtype)
     h_recon = v_X @ concept_dict["concepts"]
     h_recon_torch = h_recon.to(dtype=model.dtype, device=model.device).clone().detach().requires_grad_(True)
-    torch.save(h_recon_torch, "motorcycle_recon.pth")
-    print(f"h_recon_torch.shape={h_recon_torch.shape}")
+    # print(f"h_recon_torch.shape={h_recon_torch.shape}")
 
     # target_token_first_idx_in_generated_output: first index of token in generated output, calculated from first generated token (includes prompt)
     # need to modify token_index by start of caption token offset
@@ -225,20 +223,24 @@ async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_st
         target_id=target_token_vocab_idx,
         concept_matrix=concept_dict["concepts"]
     )
-    print(concept_grads)
-    print(concept_grads.shape)
     # If these are zero gradient chain is broken
-    print(f"Non-zero elements: {torch.count_nonzero(concept_grads).item()}")
-    print(f"Max gradient: {concept_grads.abs().max().item()}")
-    print(f"Non-zero elements: {torch.count_nonzero(concept_grads).item()}")
+    # print(f"Non-zero elements: {torch.count_nonzero(concept_grads).item()}")
+    # print(f"Max gradient: {concept_grads.abs().max().item()}")
+    # print(f"Non-zero elements: {torch.count_nonzero(concept_grads).item()}")
 
-    torch.save(concept_grads, "motorcycle_grad.pth")
+    yield new_log_event(logger, f"Calculating importance scores...")
     concept_activations = v_X.to(device=model.device, dtype=model.dtype) # v_X shape: [1, N_concepts]
     concept_importance_scores = concept_activations * concept_grads
-    top_scores, top_indices = torch.topk(concept_importance_scores, k=NUM_CONCEPTS) # if we match k=#concepts we should get ranking of all concepts
+    logger.info(f"Importance scores: {concept_importance_scores}")
+    logger.info(f"Activations: {concept_activations}")
 
-    # TODO: split into rankings for both positive and negative contributors.
-    for rank, (score, concept_idx) in enumerate(zip(top_scores[0], top_indices[0])):
+    sorted_activations, indices_by_activations = torch.topk(concept_activations, k=NUM_CONCEPTS)
+    sorted_importance_scores, indices_by_importance = torch.topk(concept_importance_scores, k=NUM_CONCEPTS)
+    
+    logger.info(f"Sorted importance scores: {sorted_importance_scores}, indices={indices_by_importance}")
+    logger.info(f"Sorted activations: {sorted_activations}, indices={indices_by_activations}")
+
+    for rank, (score, concept_idx) in enumerate(zip(sorted_importance_scores[0], indices_by_importance[0])):
         print(f"#{rank+1}: Concept {concept_idx}."
             + f"\nImage groundings ={concept_dict['image_grounding_paths'][concept_idx][:10]}" 
             + f"\nText groundings ={concept_dict['text_grounding'][concept_idx][:10]}..."
@@ -249,5 +251,10 @@ async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_st
 
     yield new_log_event(logger, f"Calculated concept importance scores for token={token_of_interest} in time={elapsed_time:.6f}s'")
     yield new_event(event_type="return", data={
-        "scores": concept_importance_scores,
+        "activations": concept_activations.tolist()[0],
+        "importance_scores": concept_importance_scores.tolist()[0],
+        "indices_by_importance": indices_by_importance.tolist()[0],
+        "indices_by_activations": indices_by_activations.tolist()[0],
+        "text_groundings": concept_dict['text_grounding'],
+        "image_grounding_paths": concept_dict['image_grounding_paths'],
     })

@@ -67,7 +67,7 @@ DEFAULT_ARGS = {
     "batch_size": 1,
 }
 
-FORCE_RECOMPUTE=False # TODO: make script argument
+FORCE_RECOMPUTE=True # TODO: make script argument
 
 @torch.no_grad()
 # This runs inference with a target token and module, and registers a forward hook so that the hidden state

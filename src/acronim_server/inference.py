@@ -72,7 +72,7 @@ DEFAULT_CAPTIONING_ARGS = {
     "batch_size": 1,
 }
 
-FORCE_RECOMPUTE=True
+FORCE_RECOMPUTE=False
 default_model_args = get_arguments(DEFAULT_CAPTIONING_ARGS)
 
 set_seed(SEED)
