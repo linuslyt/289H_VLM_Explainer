@@ -69,7 +69,7 @@ function App() {
         throw new Error(`Upload failed: ${uploadResponse.statusText}`);
       }
       const uploadResult = await uploadResponse.json();
-      const serverFilePath = uploadResult.filename; // Adjust key based on your actual backend return
+      const serverFilePath = uploadResult.filename;
       setUploadedImgPath(serverFilePath);
       
       addLog(`Backend: Image received. Requesting caption for img=${serverFilePath}`);
@@ -80,12 +80,13 @@ function App() {
 
       captionSource.addEventListener("log", (e) => {
         addLog(`Backend: ${e.data}`);
-        console.log(e.data);
       })
 
       captionSource.addEventListener("return", (e) => {
-          console.log("System: Caption generated")
+          addLog("System: Caption generated")
           setCaption(e.data);
+          setIsProcessing(false);
+          console.log(e.data);
           captionSource.close()
       })
 
@@ -98,8 +99,6 @@ function App() {
     } catch (e) {
       console.error(e);
       addLog(`Error: ${e.message}`);
-    } finally {
-      setIsProcessing(false);
     }
   }, []);
 
@@ -116,9 +115,9 @@ function App() {
         uploaded_img_path: uploadedImgPath,
         token_of_interest: token,
         sampled_subset_size: 5000,
-        sampling_inference_batch_size: 20,
-        n_concepts: 10,
-        force_recompute: true // TODO: add button to toggle this. Also set to true if n_concepts or sampled_subset_size changes for the same token of interest.
+        sampling_inference_batch_size: 20, // TODO: add input for this
+        n_concepts: 10, // TODO: add slider for this
+        force_recompute: false // TODO: add button to toggle this. Also set to true if n_concepts or sampled_subset_size changes for the same token of interest.
       });
 
       const encodedExplainURL = `${baseExplainUrl}?${params.toString()}`;
@@ -128,12 +127,13 @@ function App() {
 
         explainSource.addEventListener("log", (e) => {
           addLog(`Backend: ${e.data}`);
-          console.log(e.data);
         })
 
         explainSource.addEventListener("return", (e) => {
-            console.log("System: Explanations generated")
-            setExplanationData(e.data);
+            addLog("System: Explanations generated")
+            setExplanationData(JSON.parse(e.data));
+            setIsExplaining(false);
+            console.log(e.data);
             explainSource.close()
         })
 
@@ -146,10 +146,8 @@ function App() {
       } catch (e) {
         console.error(e);
         addLog(`Error: ${e.message}`);
-      } finally {
-        setIsExplaining(false);
       }
-  }, [uploadedImgPath, selectedToken]);
+  }, [uploadedImgPath]);
 
 
   return (
@@ -165,7 +163,7 @@ function App() {
         bgcolor: '#f4f6f8'
       }}>
         <Box sx={{ 
-          width: '50%', 
+          width: '40%', 
           height: '100%', 
           display: 'flex', 
           flexDirection: 'column',
@@ -195,6 +193,7 @@ function App() {
         <Visualizations
           selectedToken={selectedToken}
           isExplaining={isExplaining}
+          uploadedImgPath={uploadedImgPath}
           explanationData={explanationData}
         />
 

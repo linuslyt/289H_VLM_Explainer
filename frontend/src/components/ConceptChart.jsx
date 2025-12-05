@@ -1,6 +1,6 @@
-import React, { useRef, useEffect } from 'react';
-import * as d3 from 'd3';
 import { Box, Typography } from '@mui/material';
+import * as d3 from 'd3';
+import { useEffect, useRef } from 'react';
 
 const ConceptChart = ({ data, color = "#2196f3" }) => {
   const svgRef = useRef(null);
@@ -33,14 +33,8 @@ const ConceptChart = ({ data, color = "#2196f3" }) => {
     const y = d3.scaleLinear()
       .rangeRound([height, 0]);
 
-    // Simplify labels
-    const processedData = data.map(d => ({
-        ...d,
-        shortId: d.id.includes('#') ? '#' + d.id.split('#')[1].split(' ')[0] : d.id.substring(0, 5)
-    }));
-
-    x.domain(processedData.map(d => d.shortId));
-    y.domain([0, 1]); // Score is 0-1
+    x.domain(data.map(d => d.concept_id));
+    y.domain(d3.extent(data.map(d => d.score)));
 
     // Add X Axis
     svg.append("g")
@@ -65,10 +59,10 @@ const ConceptChart = ({ data, color = "#2196f3" }) => {
 
     // Add Bars
     svg.selectAll(".bar")
-      .data(processedData)
+      .data(data)
       .enter().append("rect")
       .attr("class", "bar")
-      .attr("x", d => x(d.shortId))
+      .attr("x", d => x(d.concept_id))
       .attr("y", d => y(d.score))
       .attr("width", x.bandwidth())
       .attr("height", d => height - y(d.score))

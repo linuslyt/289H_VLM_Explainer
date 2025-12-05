@@ -1,6 +1,5 @@
-import React from 'react';
-import { Box, Typography } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import { Box, Typography } from '@mui/material';
 import { useDropzone } from 'react-dropzone';
 
 const ImageUploader = ({ onDrop, preview }) => {
@@ -12,7 +11,7 @@ const ImageUploader = ({ onDrop, preview }) => {
 
   return (
     <Box sx={{ 
-      height: '50%', 
+      height: '40%', 
       p: 2, 
       display: 'flex', 
       flexDirection: 'column' 
