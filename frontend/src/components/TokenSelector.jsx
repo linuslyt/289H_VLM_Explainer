@@ -60,6 +60,7 @@ const TokenSelector = ({ caption, selectedToken, isProcessing, onTokenClick }) =
                   transition: 'all 0.1s',
                   '&:hover': { bgcolor: 'grey.200', color: 'black' }
                 }}
+                variant="body1"
               >
                 {word}
               </Typography>
