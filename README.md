@@ -11,8 +11,8 @@ This was created as a final course project for the **ECS289H - Explainable AI us
 On the machine where you're hosting the backend:
 
 1. Clone repo
-2. Download MS COCO dataset
-3. Download Karpathy splits
+2. Download MS COCO dataset. We used the 2014 train and val splits from <https://cocodataset.org/#download>.
+3. Download Karpathy splits. The specific annotation file is no longer publicly available; we sourced it from <https://github.com/Delphboy/karpathy-splits>.
 4. Update paths: `DATA_DIR, ANNOTATION_FILE, OUT_DIR` under `src/importance_estimation.py`
 5. Install miniconda
 6. Install Packages
