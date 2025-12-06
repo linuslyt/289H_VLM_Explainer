@@ -1,42 +1,3 @@
-# import argparse
-# import os
-# from datetime import datetime
-# import torch
-# from tqdm import tqdm
-# from typing import Any, Callable, Dict, List, Tuple, Union
-# import copy
-
-# from datasets import get_dataset_loader
-# from helpers.arguments import get_arguments
-# from helpers.logger import log_args, setup_logger
-# from helpers.utils import (clear_forward_hooks, clear_hooks_variables, get_most_free_gpu,
-#                            get_vocab_idx_of_target_token, get_first_pos_of_token_of_interest,
-#                            set_seed, setup_hooks, update_dict_of_list)
-# from models import get_module_by_path
-# from models.image_text_model import ImageTextModel
-# import numpy as np
-
-# from save_features import inference
-# from analysis import analyse_features
-# from analysis.feature_decomposition import get_feature_matrix, project_representations
-# from acronim_server import (get_output_hidden_state_paths, get_uploaded_img_saved_path,
-#                             get_uploaded_img_dir, get_saved_hidden_states_dir,
-#                             get_output_concept_dictionary_path,
-#                             get_saved_concept_dicts_dir,
-#                             get_llava_model_class, get_dict_model_class,
-#                             new_log_event, new_event, CAPTIONING_PROMPT)
-# from sklearn.metrics import auc  # Renamed to avoid confusion
-# import time
-
-# OUT_DIR="/home/ytllam/xai/xl-vlms/out/gradient_concept"
-# LOG_FILE=os.path.join(os.path.join(OUT_DIR, f"acronim_{datetime.now().strftime('%m-%d-%Y_%H-%M-%S')}.log"))
-# logger = setup_logger(LOG_FILE)
-
-# TARGET_LAYER_PATH = "language_model.model.layers.31"
-# llava_model_class = get_llava_model_class()
-# model = llava_model_class.get_model()
-
-
 import argparse
 import os
 from datetime import datetime
@@ -52,7 +13,13 @@ import time
 from helpers.logger import setup_logger
 from helpers.utils import (get_vocab_idx_of_target_token, get_first_pos_of_token_of_interest)
 from models import get_module_by_path
-from acronim_server import (get_llava_model_class, new_log_event, new_event)
+from acronim_server import (get_llava_model_class, new_log_event, new_event, get_uploaded_img_dir)
+
+# Import reusable logic
+from acronim_server.concept_importance import get_concept_grad_at_target_token_step
+from analysis.feature_decomposition import get_feature_matrix, project_representations
+from acronim_server.inference import get_hidden_states_for_training_samples
+from acronim_server.plotting import plot_dataset_benchmark
 
 # Setup Logger
 OUT_DIR = "/home/ytllam/xai/xl-vlms/out/gradient_concept"
@@ -63,6 +30,7 @@ logger = setup_logger(LOG_FILE)
 TARGET_LAYER_PATH = "language_model.model.layers.31"
 llava_model_class = get_llava_model_class()
 model = llava_model_class.get_model()
+
 
 # -----------------------------------------------------------------------------
 # HELPER: Forward Pass with Patching
@@ -121,6 +89,79 @@ def get_metric_with_patched_state(
     finally:
         hook_handle.remove()
 
+
+# -----------------------------------------------------------------------------
+# HELPER: Calculate Importance on the Fly
+# -----------------------------------------------------------------------------
+def compute_sample_importance(
+    test_item: Dict[str, Any],
+    concept_dict: Dict[str, Any],
+    token_of_interest: str
+):
+    """
+    Calculates activations and importance scores for a single sample on the fly.
+    Includes explicit check for 'token_of_interest_mask'.
+    """
+    # 0. SAFETY CHECK: Check the validity mask first
+    # This prevents processing samples where the token wasn't generated.
+    mask_val = False
+    if "token_of_interest_mask" in test_item:
+        mask_data = test_item["token_of_interest_mask"]
+        
+        # Handle various data structures (List of Tensors, single Tensor, or raw list)
+        if isinstance(mask_data, list):
+            mask_data = mask_data[0] # Unwrap list
+        
+        if isinstance(mask_data, torch.Tensor):
+            mask_val = mask_data.item() # Unwrap tensor to bool
+        else:
+            mask_val = bool(mask_data)
+            
+    if not mask_val:
+        raise ValueError(f"Skipping sample: Token '{token_of_interest}' was not found in the generated output (mask=False).")
+
+    # 1. Project to get Activations
+    # Note: inference.py returns hidden states in a list structure
+    feat = get_feature_matrix(test_item["hidden_states"], module_name=TARGET_LAYER_PATH, token_idx=None)
+    projections = project_representations(
+        sample=feat,
+        analysis_model=concept_dict["analysis_model"],
+        decomposition_type=concept_dict["decomposition_method"],
+    )
+    
+    activations = torch.tensor(projections, device=model.device, dtype=model.dtype)
+    
+    # 2. Reconstruct Hidden State (differentiable)
+    concept_matrix = concept_dict["concepts"].to(device=model.device, dtype=model.dtype)
+    h_recon = activations @ concept_matrix
+    h_recon_torch = h_recon.clone().detach().requires_grad_(True)
+    
+    # 3. Get Token Indices
+    target_token_vocab_idx = get_vocab_idx_of_target_token(token_of_interest, None, llava_model_class.get_tokenizer())
+    
+    # We use the safe accessor here, knowing the key exists because mask was True
+    layer_tokens = test_item["hidden_states"][0][TARGET_LAYER_PATH][0]
+    
+    token_index, _ = get_first_pos_of_token_of_interest(
+        tokens=layer_tokens,
+        pred_tokens=test_item.get("model_output")[0],
+        target_token_vocab_idx=target_token_vocab_idx, 
+    )
+    
+    # 4. Calculate Gradient (Reusing imported function)
+    grad_wrt_concepts = get_concept_grad_at_target_token_step(
+        model_class=llava_model_class,
+        test_item=test_item,
+        token_index=token_index,
+        h_recon_torch=h_recon_torch,
+        target_id=target_token_vocab_idx,
+        concept_matrix=concept_matrix
+    )
+        
+    # 5. Compute Importance
+    importance_scores = activations * grad_wrt_concepts
+    
+    return activations, importance_scores, token_index, target_token_vocab_idx
 
 # -----------------------------------------------------------------------------
 # METRIC 1: C-DELETION
@@ -230,7 +271,6 @@ def compute_c_insertion_metrics(
 
     # Normalize/Prepare
     if metric_mode == "probability":
-        # Usually for insertion we care about reaching the max probability
         max_val = max(raw_trajectory) if max(raw_trajectory) > 0 else 1.0
         norm_trajectory = [p / max_val for p in raw_trajectory]
     else:
@@ -297,7 +337,6 @@ def compute_c_fidelity_metrics(
         
     # Calculate Correlation
     if len(predicted_deltas) > 1:
-        # Check if variance exists (avoid divide by zero)
         if np.std(predicted_deltas) > 0 and np.std(actual_deltas) > 0:
             correlation, p_value = pearsonr(predicted_deltas, actual_deltas)
         else:
@@ -309,7 +348,7 @@ def compute_c_fidelity_metrics(
 
 
 # -----------------------------------------------------------------------------
-# CONSOLIDATED PIPELINE
+# SINGLE SAMPLE PIPELINE
 # -----------------------------------------------------------------------------
 
 async def run_faithfulness_evaluation_pipeline(
@@ -320,8 +359,7 @@ async def run_faithfulness_evaluation_pipeline(
     concept_importance_scores: Union[torch.Tensor, List[float]] 
 ):
     """
-    Runs C-Deletion, C-Insertion, and C-µFidelity sequentially.
-    Yields progress events and returns a consolidated results dictionary.
+    Runs metrics for a SINGLE sample.
     """
     results = {}
     
@@ -330,7 +368,6 @@ async def run_faithfulness_evaluation_pipeline(
         yield new_log_event(logger, f"Starting Full Faithfulness Evaluation for '{token_of_interest}'...")
 
         # 1. SETUP & TENSOR CONVERSION
-        # -------------------------------------------------
         if isinstance(concept_activations, list):
             concept_activations = torch.tensor([concept_activations], device=model.device, dtype=model.dtype)
         else:
@@ -341,7 +378,6 @@ async def run_faithfulness_evaluation_pipeline(
         else:
             concept_importance_scores = concept_importance_scores.to(device=model.device, dtype=model.dtype)
 
-        # Setup indices
         target_token_vocab_idx = get_vocab_idx_of_target_token(
             token_of_interest, None, llava_model_class.get_tokenizer()
         )
@@ -353,85 +389,214 @@ async def run_faithfulness_evaluation_pipeline(
         
         concept_matrix = concept_dict["concepts"]
 
-        # 2. RUN C-DELETION
-        # -------------------------------------------------
-        yield new_log_event(logger, "Running C-Deletion (Goal: Ours AUC < Random AUC)...")
-        
-        # Ours
+        # 2. RUN METRICS
+        yield new_log_event(logger, "Running C-Deletion...")
         traj_del_ours, auc_del_ours = compute_c_deletion_metrics(
             uploaded_img_hidden_state, token_index, target_token_vocab_idx,
-            concept_matrix, concept_activations, concept_importance_scores
+            concept_matrix, concept_activations, concept_importance_scores, metric_mode="logit"
         )
-        # Random
         rand_scores = torch.rand_like(concept_importance_scores)
         traj_del_rand, auc_del_rand = compute_c_deletion_metrics(
             uploaded_img_hidden_state, token_index, target_token_vocab_idx,
-            concept_matrix, concept_activations, rand_scores
+            concept_matrix, concept_activations, rand_scores, metric_mode="logit"
         )
-        
-        del_faithful = auc_del_ours < auc_del_rand
-        yield new_log_event(logger, f" -> Deletion: {'FAITHFUL' if del_faithful else 'UNFAITHFUL'} (Ours: {auc_del_ours:.2f}, Rand: {auc_del_rand:.2f})")
-        
         results["c_deletion"] = {
             "auc_ours": auc_del_ours, "auc_random": auc_del_rand,
             "trajectory_ours": traj_del_ours, "trajectory_random": traj_del_rand,
-            "is_faithful": bool(del_faithful)
+            "is_faithful": bool(auc_del_ours < auc_del_rand)
         }
 
-        # 3. RUN C-INSERTION
-        # -------------------------------------------------
-        yield new_log_event(logger, "Running C-Insertion (Goal: Ours AUC > Random AUC)...")
-        
-        # Ours
+        yield new_log_event(logger, "Running C-Insertion...")
         traj_ins_ours, auc_ins_ours = compute_c_insertion_metrics(
             uploaded_img_hidden_state, token_index, target_token_vocab_idx,
-            concept_matrix, concept_activations, concept_importance_scores
+            concept_matrix, concept_activations, concept_importance_scores, metric_mode="logit"
         )
-        # Random
         traj_ins_rand, auc_ins_rand = compute_c_insertion_metrics(
             uploaded_img_hidden_state, token_index, target_token_vocab_idx,
-            concept_matrix, concept_activations, rand_scores
+            concept_matrix, concept_activations, rand_scores, metric_mode="logit"
         )
-        
-        ins_faithful = auc_ins_ours > auc_ins_rand
-        yield new_log_event(logger, f" -> Insertion: {'FAITHFUL' if ins_faithful else 'UNFAITHFUL'} (Ours: {auc_ins_ours:.2f}, Rand: {auc_ins_rand:.2f})")
-        
         results["c_insertion"] = {
             "auc_ours": auc_ins_ours, "auc_random": auc_ins_rand,
             "trajectory_ours": traj_ins_ours, "trajectory_random": traj_ins_rand,
-            "is_faithful": bool(ins_faithful)
+            "is_faithful": bool(auc_ins_ours > auc_ins_rand)
         }
 
-        # 4. RUN C-FIDELITY
-        # -------------------------------------------------
-        yield new_log_event(logger, "Running C-µFidelity (Goal: High Correlation)...")
-
+        yield new_log_event(logger, "Running C-µFidelity...")
         corr, p_val, pred_deltas, act_deltas = compute_c_fidelity_metrics(
             uploaded_img_hidden_state, token_index, target_token_vocab_idx,
-            concept_matrix, concept_activations, concept_importance_scores
+            concept_matrix, concept_activations, concept_importance_scores, metric_mode="logit"
         )
-        
-        # Fidelity Verdict (Threshold > 0.1 is arbitrary but standard for checking existence of signal)
-        fid_faithful = corr > 0.1 
-        yield new_log_event(logger, f" -> Fidelity: {'FAITHFUL' if fid_faithful else 'LOW SIGNAL'} (Corr: {corr:.4f})")
-        
         results["c_fidelity"] = {
-            "correlation": corr,
-            "p_value": p_val,
-            "is_faithful": bool(fid_faithful),
-            "predicted_deltas": pred_deltas, # for plotting
-            "actual_deltas": act_deltas      # for plotting
+            "correlation": corr, "p_value": p_val,
+            "is_faithful": bool(corr > 0.1),
+            "predicted_deltas": pred_deltas, "actual_deltas": act_deltas
         }
 
-        # 5. FINALIZE
-        # -------------------------------------------------
         elapsed = time.perf_counter() - start_time_all
         yield new_log_event(logger, f"Faithfulness Evaluation Complete in {elapsed:.2f}s")
-        
-        # Return consolidated dictionary
         yield new_event(event_type="return", data=results)
 
     except Exception as e:
-        logger.error(f"Error in Faithfulness Pipeline: {str(e)}")
-        yield new_event(event_type="error", data=f"Error in Faithfulness Pipeline: {str(e)}")
+        logger.error(f"Error in Single-Sample Pipeline: {str(e)}")
+        yield new_event(event_type="error", data=f"Error: {str(e)}")
         return
+
+
+# -----------------------------------------------------------------------------
+# DATASET LEVEL PIPELINE
+# -----------------------------------------------------------------------------
+
+async def run_dataset_faithfulness_pipeline(
+    token_of_interest: str,
+    sampled_subset_size: int,
+    num_eval_samples: int,
+    concept_dict: Dict[str, Any],
+    force_recompute: bool = False
+):
+    """
+    Evaluates faithfulness over a batch of samples and generates aggregated plots.
+    """
+    
+    # Aggregators
+    results_agg = {
+        "deletion_auc_ours": [], "deletion_auc_rand": [],
+        "insertion_auc_ours": [], "insertion_auc_rand": [],
+        "fidelity_corr": [],
+        "samples_processed": 0
+    }
+    
+    # Curve storage for averaging
+    deletion_curves_ours = []
+    deletion_curves_rand = []
+    insertion_curves_ours = []
+    insertion_curves_rand = []
+
+    try:
+        yield new_log_event(logger, f"Starting Dataset-Level Faithfulness on {num_eval_samples} samples...")
+
+        # 1. Fetch Samples
+        batch_data = None
+        async for event_type, data in get_hidden_states_for_training_samples(
+            token_of_interest=token_of_interest,
+            sampled_subset_size=sampled_subset_size,
+            force_recompute=force_recompute,
+            batch_size=num_eval_samples 
+        ):
+            if event_type == "return":
+                batch_data = data
+            elif event_type == "error":
+                yield new_event("error", data)
+                return
+        # print(batch_data)
+
+        if not batch_data:
+            yield new_event("error", "Failed to retrieve training samples.")
+            return
+
+        # 2. Iterate Samples
+        total_available = len(batch_data['hidden_states'])
+        limit = min(total_available, num_eval_samples)
+        
+        yield new_log_event(logger, f"Evaluating faithfulness metrics for token={token_of_interest} on {limit} samples...")
+
+        for i in range(limit):
+            # Slice batch into single sample dict
+            test_item = {
+                k: [v[i]] if isinstance(v, list) and len(v) > i else v 
+                for k, v in batch_data.items()
+            }
+            
+            try:
+                # Calculate Importance on the fly
+                activations, scores, t_idx, t_id = compute_sample_importance(
+                    test_item, concept_dict, token_of_interest
+                )
+                
+                # --- Deletion ---
+                traj_del, auc_del = compute_c_deletion_metrics(
+                    test_item, t_idx, t_id, concept_dict["concepts"], activations, scores, metric_mode="logit"
+                )
+                # Compute Random Baseline for Deletion
+                rand_scores = torch.rand_like(scores)
+                traj_del_rand, auc_del_rand = compute_c_deletion_metrics(
+                    test_item, t_idx, t_id, concept_dict["concepts"], activations, rand_scores, metric_mode="logit"
+                )
+                
+                # --- Insertion ---
+                traj_ins, auc_ins = compute_c_insertion_metrics(
+                    test_item, t_idx, t_id, concept_dict["concepts"], activations, scores, metric_mode="logit"
+                )
+                # Compute Random Baseline for Insertion
+                traj_ins_rand, auc_ins_rand = compute_c_insertion_metrics(
+                    test_item, t_idx, t_id, concept_dict["concepts"], activations, rand_scores, metric_mode="logit"
+                )
+                
+                # --- Fidelity ---
+                corr, _, _, _ = compute_c_fidelity_metrics(
+                    test_item, t_idx, t_id, concept_dict["concepts"], activations, scores, metric_mode="logit"
+                )
+
+                # Store Stats
+                results_agg["deletion_auc_ours"].append(auc_del)
+                results_agg["deletion_auc_rand"].append(auc_del_rand)
+                results_agg["insertion_auc_ours"].append(auc_ins)
+                results_agg["insertion_auc_rand"].append(auc_ins_rand)
+                if not np.isnan(corr): results_agg["fidelity_corr"].append(corr)
+                
+                # Store Curves for Averaging
+                deletion_curves_ours.append(traj_del)
+                deletion_curves_rand.append(traj_del_rand)
+                insertion_curves_ours.append(traj_ins)
+                insertion_curves_rand.append(traj_ins_rand)
+                
+                results_agg["samples_processed"] += 1
+                
+                if (i+1) % 5 == 0:
+                    yield new_log_event(logger, f"Processed {i+1}/{limit} samples...")
+
+            except Exception as e:
+                logger.error(f"Failed sample {i}: {e}")
+                continue
+
+        # 3. Aggregate
+        n = results_agg["samples_processed"]
+        if n == 0:
+            yield new_event("error", "No samples were successfully processed.")
+            return
+
+        final_stats = {
+            "token": token_of_interest,
+            "samples_n": n,
+            "deletion": {
+                "auc_ours_mean": float(np.mean(results_agg["deletion_auc_ours"])),
+                "auc_ours_std": float(np.std(results_agg["deletion_auc_ours"])),
+                "auc_rand_mean": float(np.mean(results_agg["deletion_auc_rand"])),
+                "curve_ours_mean": np.mean(deletion_curves_ours, axis=0).tolist(),
+                "curve_rand_mean": np.mean(deletion_curves_rand, axis=0).tolist(),
+            },
+            "insertion": {
+                "auc_ours_mean": float(np.mean(results_agg["insertion_auc_ours"])),
+                "auc_rand_mean": float(np.mean(results_agg["insertion_auc_rand"])),
+                "curve_ours_mean": np.mean(insertion_curves_ours, axis=0).tolist(),
+                "curve_rand_mean": np.mean(insertion_curves_rand, axis=0).tolist(),
+            },
+            "fidelity": {
+                "correlation_mean": float(np.mean(results_agg["fidelity_corr"])),
+                "correlation_std": float(np.std(results_agg["fidelity_corr"])),
+                "raw_correlations": results_agg["fidelity_corr"]
+            }
+        }
+        
+        # 4. Generate Plots
+        plots_dir = os.path.join(get_uploaded_img_dir(), "plots")
+        plot_files = plot_dataset_benchmark(final_stats, plots_dir)
+        final_stats["plots"] = plot_files
+        
+        verdict_msg = f"Dataset Eval ({n} samples) Complete. Plots generated."
+        yield new_log_event(logger, verdict_msg)
+        
+        yield new_event("return", final_stats)
+
+    except Exception as e:
+        logger.error(f"Dataset Pipeline Error: {e}")
+        yield new_event("error", str(e))

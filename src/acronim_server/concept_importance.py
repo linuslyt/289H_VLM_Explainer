@@ -157,6 +157,7 @@ async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_st
         yield new_log_event(logger, f"Projecting input image hidden representation w/r/t selected token onto concept dict...")
         # # From concept_grounding_visualization.ipynb example
         data = torch.load(uploaded_img_hidden_state_path, map_location="cpu")
+        # test_item can be pulled from data now that we've fixed the saved data keys
         test_item = uploaded_img_hidden_state
         feat = get_feature_matrix(data["hidden_states"], module_name="language_model.model.layers.31", token_idx=None)
 

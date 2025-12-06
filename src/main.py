@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, HTTPException, UploadFile, status, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -9,15 +9,16 @@ import os
 from pydantic import BaseModel
 from PIL import Image, UnidentifiedImageError
 import torch
-from typing import Union
+from typing import Union, List
+import numpy as np
 
 from acronim_server import new_event, get_uploaded_img_saved_path, get_grounding_image_dir, get_uploaded_img_dir
 from acronim_server.inference import (caption_uploaded_img, get_hidden_state_for_input, get_hidden_states_for_training_samples, 
                                       DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, COCO_TRAIN_FULL_SIZE)
 from acronim_server.dictionary_learning import learn_concept_dictionary_for_token
 from acronim_server.concept_importance import calculate_concept_importance
-from acronim_server.metrics import run_faithfulness_evaluation_pipeline
-from acronim_server.plotting import generate_faithfulness_plots
+from acronim_server.metrics import run_faithfulness_evaluation_pipeline, run_dataset_faithfulness_pipeline
+from acronim_server.plotting import generate_faithfulness_plots, plot_dataset_benchmark
 from helpers.utils import (get_most_free_gpu)
 
 # TODO: type checking with pydantic
@@ -176,6 +177,7 @@ async def metric_calculation_pipeline(uploaded_img_path: str, token_of_interest:
             yield new_event(event_type=event_type, data=data, passthrough=False)
 
     # Get hidden states from training data samples that contain token of interest in ground truth caption
+    # Hidden states are saved to path determined by token of interest
     async for event_type, data in get_hidden_states_for_training_samples(token_of_interest, sampled_subset_size, 
                                                                          force_recompute, batch_size=sampling_inference_batch_size):
         if event_type == "return":
@@ -186,6 +188,7 @@ async def metric_calculation_pipeline(uploaded_img_path: str, token_of_interest:
     print(relevant_samples_hidden_state.keys())
 
     # Learn concept dictionary
+    # Hidden states are retrieved from path determined by token of interest
     async for event_type, data in learn_concept_dictionary_for_token(token_of_interest, sampled_subset_size, n_concepts, force_recompute):
         if event_type == "return":
             concept_dict_for_token = data
@@ -231,12 +234,151 @@ async def metric_calculation_pipeline(uploaded_img_path: str, token_of_interest:
     yield new_event(event_type="return", data=results, passthrough=False)
     return
 
-@app.get("/calculate-metrics")
-async def calculate_metrics(uploaded_img_path: str, token_of_interest: str, 
+@app.get("/instance-metrics")
+async def calculate_metrics_for_instance(uploaded_img_path: str, token_of_interest: str, 
                                 sampled_subset_size: int = 5000, sampling_inference_batch_size: int = 26, 
                                 n_concepts: int = 10, force_recompute: bool = False):
     return StreamingResponse(metric_calculation_pipeline(uploaded_img_path, token_of_interest, sampled_subset_size,
                                                             sampling_inference_batch_size, n_concepts, force_recompute), media_type="text/event-stream")
+
+async def multi_token_benchmark_pipeline(
+    tokens: List[str],
+    sampled_subset_size: int,
+    num_eval_samples: int,
+    n_concepts: int,
+    sampling_inference_batch_size: int,
+    force_recompute: bool,
+):
+    """
+    Orchestrates the benchmark across multiple tokens.
+    For each token: Gets sampled hidden states -> Gets Dict -> Runs Dataset Metrics -> Collects Results.
+    """
+    
+    # Clamping (apply same logic as single instance)
+    sampled_subset_size = clamp_value(sampled_subset_size, min_val=DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, max_val=COCO_TRAIN_FULL_SIZE)
+    n_concepts = clamp_value(n_concepts, min_val=3, max_val=20)
+    num_eval_samples = clamp_value(num_eval_samples, min_val=10, max_val=200) # Reasonable limit for dataset eval
+    sampling_inference_batch_size = clamp_value(sampling_inference_batch_size, min_val=1, max_val=50)
+
+    yield new_event("log", f"Starting Multi-Token Benchmark on {len(tokens)} tokens...", passthrough=False)
+
+    aggregated_results = {}
+    intermediate_results_path = os.path.join(get_uploaded_img_dir(), f"{num_eval_samples}_sample_{n_concepts}_concepts_benchmark_itmd_results.pth")
+    if os.path.exists(intermediate_results_path) and not force_recompute:
+        aggregated_results = torch.load(intermediate_results_path)
+        yield new_event("log", f"Loaded previously cached metric results for tokens={tokens}...", passthrough=False)
+    else:
+        for token in tokens:
+            yield new_event("log", f"Retrieving relevant samples for token={token}", passthrough=False)
+            async for event_type, data in get_hidden_states_for_training_samples(
+                token, sampled_subset_size, force_recompute=False, batch_size=sampling_inference_batch_size
+            ):
+                if event_type == "return":
+                    # we don't need to pass this to next steps; learn_concept_dictionary_for_token() will load from cached path
+                    relevant_samples_hidden_state = data
+                else:
+                    yield new_event(event_type=event_type, data=data, passthrough=False)
+
+            yield new_event("log", f"Learning concept dictionary for toke={token}", passthrough=False)
+            concept_dict = None
+            async for event_type, data in learn_concept_dictionary_for_token(
+                token, sampled_subset_size, n_concepts, force_recompute=False
+            ):
+                if event_type == "return":
+                    concept_dict = data
+                elif event_type == "error":
+                    yield new_event("error", f"Dictionary learning failed for '{token}': {data}", passthrough=False)
+                else:
+                    # Stream logs so user sees dictionary progress
+                    yield new_event(event_type, data, passthrough=False)
+            
+            if not concept_dict:
+                yield new_event("log", f"Skipping '{token}' due to dictionary failure.", passthrough=False)
+                continue
+
+            # Generate faithfulness metrics for token of interest
+            token_stats = None
+            async for event_type, data in run_dataset_faithfulness_pipeline(
+                token_of_interest=token,
+                sampled_subset_size=sampled_subset_size,
+                num_eval_samples=num_eval_samples,
+                concept_dict=concept_dict,
+                force_recompute=force_recompute
+            ):
+                if event_type == "return":
+                    token_stats = data
+                    aggregated_results[token] = token_stats
+                else:
+                    yield new_event(event_type, data, passthrough=False)
+
+    if aggregated_results:
+        yield new_event("log", "Calculating benchmark averages across all tokens...", passthrough=False)
+        
+        # Extract lists of curves
+        del_curves_ours = [res["deletion"]["curve_ours_mean"] for res in aggregated_results.values()]
+        del_curves_rand = [res["deletion"]["curve_rand_mean"] for res in aggregated_results.values()]
+        ins_curves_ours = [res["insertion"]["curve_ours_mean"] for res in aggregated_results.values()]
+        ins_curves_rand = [res["insertion"]["curve_rand_mean"] for res in aggregated_results.values()]
+        fid_corrs = [res["fidelity"]["correlation_mean"] for res in aggregated_results.values()]
+
+        # Compute Means (axis=0 averages the curves point-by-point)
+        # Note: This assumes all curves have same length (valid if n_concepts is constant)
+        macro_stats = {
+            "token": "MACRO_AVERAGE", # Label for the plot title
+            "samples_n": sum(res["samples_n"] for res in aggregated_results.values()),
+            "deletion": {
+                "auc_ours_mean": np.mean([res["deletion"]["auc_ours_mean"] for res in aggregated_results.values()]),
+                "auc_rand_mean": np.mean([res["deletion"]["auc_rand_mean"] for res in aggregated_results.values()]),
+                "curve_ours_mean": np.mean(del_curves_ours, axis=0).tolist(),
+                "curve_rand_mean": np.mean(del_curves_rand, axis=0).tolist(),
+            },
+            "insertion": {
+                "auc_ours_mean": np.mean([res["insertion"]["auc_ours_mean"] for res in aggregated_results.values()]),
+                "auc_rand_mean": np.mean([res["insertion"]["auc_rand_mean"] for res in aggregated_results.values()]),
+                "curve_ours_mean": np.mean(ins_curves_ours, axis=0).tolist(),
+                "curve_rand_mean": np.mean(ins_curves_rand, axis=0).tolist(),
+            },
+            "fidelity": {
+                "correlation_mean": np.mean(fid_corrs),
+                # For histogram, we can combine all raw correlations into one massive list
+                "raw_correlations": [val for res in aggregated_results.values() for val in res["fidelity"]["raw_correlations"]]
+            }
+        }
+
+        # Generate averaged plots
+        plots_dir = os.path.join(get_uploaded_img_dir(), "plots")
+        macro_plots = plot_dataset_benchmark(macro_stats, plots_dir)
+        
+        # Add macro results to the final return
+        aggregated_results["macro_average"] = macro_stats
+        aggregated_results["macro_average"]["plots"] = macro_plots
+        torch.save(aggregated_results, os.path.join(get_uploaded_img_dir(), f"{num_eval_samples}_sample_{n_concepts}_concepts_benchmark_results.pth"))
+
+        yield new_event("return", aggregated_results, passthrough=False)
+    else:
+        yield new_event("error", "Benchmark failed to produce results for any token.", passthrough=False)
+
+@app.get("/dataset-metrics")
+async def calculate_metrics_for_entire_dataset(
+    tokens: List[str] = Query(default=["motorcycle", "dog", "bench"], description="List of tokens to benchmark (e.g. ?tokens=motorcycle&tokens=dog)"),
+    sampled_subset_size: int = 22783,
+    sampling_inference_batch_size: int = 25,
+    num_eval_samples: int = 25, # N=50 is standard for papers
+    n_concepts: int = 10,
+    force_recompute: bool = False
+):
+    print(f"Requesting Dataset Metrics for: {tokens}")
+    return StreamingResponse(
+        multi_token_benchmark_pipeline(
+            tokens,
+            sampled_subset_size,
+            num_eval_samples,
+            n_concepts,
+            sampling_inference_batch_size,
+            force_recompute,
+        ), 
+        media_type="text/event-stream"
+    )
 
 # Gronuding images can be retrieved by filename - e.g. http://localhost:8000/grounding-images/COCO_train2014_000000095381.jpg
 app.mount("/grounding-images", StaticFiles(directory=get_grounding_image_dir()), name="grounding-images")

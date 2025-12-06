@@ -200,7 +200,12 @@ def get_hidden_states_of_relevant_samples(
     if hook_postprocessing_functions is not None:
         for func in hook_postprocessing_functions:
             if func is not None:
-                func(data=hook_data, args=args, logger=logger)
+                func(data=hook_data, 
+                     data_keys=['img_id', 'instruction', 'response', 'image',
+                                'targets', 'text', 'preprocessed_input', 
+                                'model_output', 'model_generated_output', 'model_predictions',
+                                'token_of_interest_mask', 'hidden_states'], # save all fields, not just hidden_states
+                     args=args, logger=logger)
     
     return hook_data
 
