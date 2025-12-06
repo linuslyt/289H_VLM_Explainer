@@ -36,7 +36,7 @@ const ConceptBar = ({ score, maxScore = 1, color, label }) => {
       // "0.000" at 10px font is approx 30-35px wide. +6px padding = ~40px.
       // If the colored bar is narrower than 40px, the text sits on the light gray background.
       const barPixelWidth = currentWidth * ratio;
-      const textColor = barPixelWidth < 45 ? "#424242" : "#ffffff";
+      const textColor = barPixelWidth < 35 ? "#424242" : "#ffffff";
 
       // Foreground Bar (Colored)
       const bar = svg.append("rect")
