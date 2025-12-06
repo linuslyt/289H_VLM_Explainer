@@ -257,7 +257,7 @@ def compute_c_fidelity_metrics(
     importance_scores: torch.Tensor,
     metric_mode: str = "logit",
     num_samples: int = 50 
-) -> Tuple[float, float]:
+) -> Tuple[float, float, List[float], List[float]]:
     """
     Computes Pearson correlation between Expected Drop (based on importance)
     and Actual Drop (based on model output) over random subsets.
@@ -305,7 +305,7 @@ def compute_c_fidelity_metrics(
     else:
         correlation, p_value = 0.0, 1.0
 
-    return correlation, p_value
+    return correlation, p_value, predicted_deltas, actual_deltas
 
 
 # -----------------------------------------------------------------------------
@@ -405,8 +405,8 @@ async def run_faithfulness_evaluation_pipeline(
         # 4. RUN C-FIDELITY
         # -------------------------------------------------
         yield new_log_event(logger, "Running C-µFidelity (Goal: High Correlation)...")
-        
-        corr, p_val = compute_c_fidelity_metrics(
+
+        corr, p_val, pred_deltas, act_deltas = compute_c_fidelity_metrics(
             uploaded_img_hidden_state, token_index, target_token_vocab_idx,
             concept_matrix, concept_activations, concept_importance_scores
         )
@@ -418,7 +418,9 @@ async def run_faithfulness_evaluation_pipeline(
         results["c_fidelity"] = {
             "correlation": corr,
             "p_value": p_val,
-            "is_faithful": bool(fid_faithful)
+            "is_faithful": bool(fid_faithful),
+            "predicted_deltas": pred_deltas, # for plotting
+            "actual_deltas": act_deltas      # for plotting
         }
 
         # 5. FINALIZE

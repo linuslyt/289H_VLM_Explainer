@@ -11,17 +11,21 @@ from PIL import Image, UnidentifiedImageError
 import torch
 from typing import Union
 
-from acronim_server import new_event, get_uploaded_img_saved_path, get_grounding_image_dir
+from acronim_server import new_event, get_uploaded_img_saved_path, get_grounding_image_dir, get_uploaded_img_dir
 from acronim_server.inference import (caption_uploaded_img, get_hidden_state_for_input, get_hidden_states_for_training_samples, 
                                       DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, COCO_TRAIN_FULL_SIZE)
 from acronim_server.dictionary_learning import learn_concept_dictionary_for_token
 from acronim_server.concept_importance import calculate_concept_importance
 from acronim_server.metrics import run_faithfulness_evaluation_pipeline
+from acronim_server.plotting import generate_faithfulness_plots
 from helpers.utils import (get_most_free_gpu)
 
 # TODO: type checking with pydantic
 
 app = FastAPI()
+
+plots_dir = os.path.join(get_uploaded_img_dir(), "plots")
+os.makedirs(plots_dir, exist_ok=True)
 
 # CORS configuration
 origins = [
@@ -212,6 +216,16 @@ async def metric_calculation_pipeline(uploaded_img_path: str, token_of_interest:
             # Pass logs/errors to client
             yield new_event(event_type=event_type, data=data, passthrough=False)
 
+    # --- GENERATE PLOTS ---
+    # Define where to save (e.g., in uploads/plots or the output dir)
+    
+    plot_files = generate_faithfulness_plots(
+        results=results["faithfulness_metrics"],
+        save_dir=plots_dir,
+        token=token_of_interest
+    )
+    results["plots"] = plot_files
+
     # Final Return
     results["image_grounding_paths"] = [[os.path.basename(img_path) for img_path in grounding_list] for grounding_list in results["image_grounding_paths"]]
     yield new_event(event_type="return", data=results, passthrough=False)
@@ -226,6 +240,8 @@ async def calculate_metrics(uploaded_img_path: str, token_of_interest: str,
 
 # Gronuding images can be retrieved by filename - e.g. http://localhost:8000/grounding-images/COCO_train2014_000000095381.jpg
 app.mount("/grounding-images", StaticFiles(directory=get_grounding_image_dir()), name="grounding-images")
+# Same for generated plots
+app.mount("/plots", StaticFiles(directory=plots_dir), name="plots")
 
 @app.get("/status")
 def get_status(): # Return server and CUDA status
