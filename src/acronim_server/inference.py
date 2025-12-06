@@ -143,8 +143,10 @@ def caption_uploaded_img(
     
     except Exception as e:
         if "CUDA out of memory" in str(e):
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data="CUDA ran out of memory. Try using a smaller sampling inference batch size.")
         else:
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data=f"Ran into an error when captioning image. Try again or try a different image.\n{str(e)}")
         return
 
@@ -246,11 +248,11 @@ async def get_hidden_state_for_input(
             for func in hook_postprocessing_functions:
                 if func is not None:
                     func(data=hook_data, 
-                        data_keys=['img_id', 'instruction', 'response', 'image',
-                                    'targets', 'text', 'preprocessed_input', 
-                                    'model_output', 'model_generated_output', 'model_predictions',
-                                    'token_of_interest_mask', 'hidden_states'], # save all fields, not just hidden_states
-                        args=args, logger=logger)
+                         data_keys=['img_id', 'instruction', 'response', 'image',
+                                     'targets', 'text', 'preprocessed_input', 
+                                     'model_output', 'model_generated_output', 'model_predictions',
+                                     'token_of_interest_mask', 'hidden_states'], # save all fields, not just hidden_states
+                         args=args, logger=logger)
         
         yield new_log_event(logger, f"Saved hidden state for img={uploaded_img_path} to {hidden_state_full_saved_path}")
 
@@ -262,8 +264,10 @@ async def get_hidden_state_for_input(
         yield new_event(event_type="return", data=(hidden_state_full_saved_path, hook_data))
     except Exception as e:
         if "CUDA out of memory" in str(e):
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data="CUDA ran out of memory. Try using a smaller sampling inference batch size.")
         else:
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data=f"Ran into an error when retrieving hidden state for sample wrt token={token_of_interest}. Try again or try a different token.\n{str(e)}")
         return
 
@@ -328,7 +332,12 @@ async def get_hidden_states_for_training_samples(
         if hook_postprocessing_functions is not None:
             for func in hook_postprocessing_functions:
                 if func is not None:
-                    func(data=hook_data, args=batch_inference_args, logger=logger)
+                    func(data=hook_data,
+                        data_keys=['img_id', 'instruction', 'response', 'image',
+                                'targets', 'text', 'preprocessed_input', 
+                                'model_output', 'model_generated_output', 'model_predictions',
+                                'token_of_interest_mask', 'hidden_states'], # save all fields, not just hidden_states
+                        args=batch_inference_args, logger=logger)
 
         end_time = time.perf_counter()
         elapsed_time = end_time - start_time
@@ -339,7 +348,9 @@ async def get_hidden_states_for_training_samples(
     
     except Exception as e:
         if "CUDA out of memory" in str(e):
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data="CUDA ran out of memory. Try using a smaller sampling inference batch size.")
         else:
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data=f"Ran into an error when sampling relevant training data. Try again or try a different token.\n{str(e)}")
         return
