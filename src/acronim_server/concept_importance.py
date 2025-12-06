@@ -214,8 +214,8 @@ async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_st
         logger.info(f"Importance scores: {concept_importance_scores}")
         logger.info(f"Activations: {concept_activations}")
 
-        sorted_activations, indices_by_activations = torch.topk(concept_activations, k=n_concepts)
-        sorted_importance_scores, indices_by_importance = torch.topk(concept_importance_scores, k=n_concepts)
+        sorted_activations, indices_by_activations = torch.topk(torch.abs(concept_activations), k=n_concepts)
+        sorted_importance_scores, indices_by_importance = torch.topk(torch.abs(concept_importance_scores), k=n_concepts)
         
         logger.info(f"Sorted importance scores: {sorted_importance_scores}, indices={indices_by_importance}")
         logger.info(f"Sorted activations: {sorted_activations}, indices={indices_by_activations}")
