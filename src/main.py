@@ -16,8 +16,7 @@ from acronim_server.inference import (caption_uploaded_img, get_hidden_state_for
                                       DICTIONARY_LEARNING_MIN_SAMPLE_SIZE, COCO_TRAIN_FULL_SIZE)
 from acronim_server.dictionary_learning import learn_concept_dictionary_for_token
 from acronim_server.concept_importance import calculate_concept_importance
-from acronim_server.metrics import run_c_deletion_pipeline
-
+from acronim_server.metrics import run_faithfulness_evaluation_pipeline
 from helpers.utils import (get_most_free_gpu)
 
 # TODO: type checking with pydantic
@@ -199,21 +198,21 @@ async def metric_calculation_pipeline(uploaded_img_path: str, token_of_interest:
             yield new_event(event_type=event_type, data=data, passthrough=False)
 
     # Run C-Deletion
-    async for event_type, data in run_c_deletion_pipeline(
+    async for event_type, data in run_faithfulness_evaluation_pipeline(
         token_of_interest=token_of_interest,
-        uploaded_img_hidden_state=uploaded_img_hidden_state, # Available from earlier in the pipeline
-        concept_dict=concept_dict_for_token,                 # Available from earlier
+        uploaded_img_hidden_state=uploaded_img_hidden_state,
+        concept_dict=concept_dict_for_token,
         concept_activations=results["activations"],
         concept_importance_scores=results["importance_scores"]
     ):
         if event_type == "return":
-            c_deletion_results = data
-            # Merge C-deletion stats into final results
-            results["faithfulness_metrics"] = c_deletion_results
+            # 'data' is now the dictionary containing all 3 metrics
+            results["faithfulness_metrics"] = data
         else:
+            # Pass logs/errors to client
             yield new_event(event_type=event_type, data=data, passthrough=False)
-    
-    print(results)
+
+    # Final Return
     results["image_grounding_paths"] = [[os.path.basename(img_path) for img_path in grounding_list] for grounding_list in results["image_grounding_paths"]]
     yield new_event(event_type="return", data=results, passthrough=False)
     return
