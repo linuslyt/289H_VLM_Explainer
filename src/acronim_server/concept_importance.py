@@ -239,7 +239,9 @@ async def calculate_concept_importance(token_of_interest, uploaded_img_hidden_st
         })
     except Exception as e:
         if "CUDA out of memory" in str(e):
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data="CUDA ran out of memory. Try using a smaller sampling inference batch size.")
         else:
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data=f"Ran into an error when calculating concept importance wrt token={token_of_interest}. Try again or try a different token.\n{str(e)}")
         return

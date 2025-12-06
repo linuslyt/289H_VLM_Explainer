@@ -143,8 +143,10 @@ def caption_uploaded_img(
     
     except Exception as e:
         if "CUDA out of memory" in str(e):
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data="CUDA ran out of memory. Try using a smaller sampling inference batch size.")
         else:
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data=f"Ran into an error when captioning image. Try again or try a different image.\n{str(e)}")
         return
 
@@ -262,8 +264,10 @@ async def get_hidden_state_for_input(
         yield new_event(event_type="return", data=(hidden_state_full_saved_path, hook_data))
     except Exception as e:
         if "CUDA out of memory" in str(e):
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data="CUDA ran out of memory. Try using a smaller sampling inference batch size.")
         else:
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data=f"Ran into an error when retrieving hidden state for sample wrt token={token_of_interest}. Try again or try a different token.\n{str(e)}")
         return
 
@@ -339,7 +343,9 @@ async def get_hidden_states_for_training_samples(
     
     except Exception as e:
         if "CUDA out of memory" in str(e):
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data="CUDA ran out of memory. Try using a smaller sampling inference batch size.")
         else:
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data=f"Ran into an error when sampling relevant training data. Try again or try a different token.\n{str(e)}")
         return

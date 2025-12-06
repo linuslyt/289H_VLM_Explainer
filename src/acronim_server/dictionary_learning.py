@@ -131,8 +131,10 @@ async def learn_concept_dictionary_for_token(token_of_interest: str, sampled_sub
         yield new_event(event_type="return", data=global_concept_dict_for_token)
     except Exception as e:
         if "CUDA out of memory" in str(e):
+            logger.info(f"Error occured: {str(e)}")
             yield new_event(event_type="error", data="CUDA ran out of memory. Try using a smaller sampling inference batch size.")
         else:
+            logger.info(f"Error occured: {str(e)}")
             # Dictionary learning might fail if there are not enough relevant samples in the sampled subset.
             yield new_event(event_type="error", data=f"Ran into an error when learning concept dictionary for token={token_of_interest}. Try again or try a different token/n_concepts/sampled_subset_size.\n{str(e)}")
         return
