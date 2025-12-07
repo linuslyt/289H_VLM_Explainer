@@ -75,7 +75,7 @@ Any reusable intermediate calculations are cached. Initial inference runs may ta
 
 ### Frontend dashboard
 
-![alt text](dashboard_screenshot.png)
+![alt text](dashboard.png)
 
 The dashboard is accessible at `http://localhost:5173`. Usage is as follows:
 
